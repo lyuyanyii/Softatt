@@ -23,12 +23,12 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import tqdm
 
-model_names = ['A', 'B']
+model_names = ['A', 'B', 'C']
 
 parser = argparse.ArgumentParser( description='Low Supervised Semantic Segmentation' )
 
 parser.add_argument( '--arch', metavar='ARCH', choices=model_names )
-parser.add_argument( '--save-folder', type=str )
+parser.add_argument( '--save-folder', type=str, metavar='PATH' )
 parser.add_argument( '--lr', type=float, help='initial learning rate' )
 #parser.add_argument( '--lr-step', type=float, help='lr will be decayed at these steps' )
 #parser.add_argument( '--lr-decay', type=float, help='lr decayed rate' )
@@ -49,6 +49,7 @@ parser.add_argument( '--print-mask',dest='print_mask',action='store_true' )
 parser.add_argument( '--no-mask',dest='no_mask',action='store_true' )
 parser.add_argument( '--advtrain',dest='advtrain',action='store_true', help='using a training strategy as GAN' )
 parser.add_argument( '--joint',dest='joint',action='store_true',help='jointly trainging' )
+parser.add_argument( '--trained-cls', dest='trained_cls', action='store_true' )
 
 class Env():
     def __init__(self, args):
@@ -119,6 +120,28 @@ class Env():
                                                     download=True, transform=train_transform)
             valid_dataset = torchvision.datasets.CIFAR10(root='./data', train=False,
                                                     download=True, transform=valid_transform)
+        elif args.dataset == 'imgnet':
+            args.data = '/scratch/datasets/imagenet/'
+            traindir = os.path.join(args.data, 'train')
+            valdir = os.path.join(args.data, 'val')
+            normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225])
+            train_dataset = torchvision.datasets.ImageFolder(
+                traindir,
+                transforms.Compose([
+                    transforms.RandomResizedCrop(224),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
+            valid_dataset = torchvision.datasets.ImageFolder(
+                valdir,
+                transforms.Compose([
+                    transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
         else:
             raise NotImplementedError('Dataset has not been implemented')
 
@@ -132,6 +155,8 @@ class Env():
 
         tot_epoch1 = (args.tot_iter - self.it) * args.batch_size // len(train_dataset) + 1
         tot_epoch2 = (args.tot_iter - self.reg_it) * args.batch_size // len(train_dataset) + 1
+        if args.trained_cls:
+            tot_epoch1 = 0
         if args.evaluation:
             self.valid()
         elif args.joint or args.advtrain:
