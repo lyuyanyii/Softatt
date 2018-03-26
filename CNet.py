@@ -33,6 +33,7 @@ class Cls( nn.Module ):
         x3 = self.layer2( x2 )
         x4 = self.layer3( x3 )
         f = self.avgpool( x4 )
+        f = f.view( f.size(0), -1 )
         pred = self.fc( f )
         return x0, x1, x2, x3, x4, pred
 
@@ -54,7 +55,13 @@ def tconv( inp_chl, out_chl, ker_size = 4, stride = 2, padding = 1 ):
 class Reg( nn.Module ):
     def __init__( self ):
         super().__init__()
-        chls = [64, 256, 512, 1024, 2048]
+        pre_chls = [64, 256, 512, 1024, 2048]
+        chls = [64//4, 256//4, 512//4, 1024//4, 2048//4]
+        self.t0 = conv( pre_chls[0], chls[0] )
+        self.t1 = conv( pre_chls[1], chls[1] )
+        self.t2 = conv( pre_chls[2], chls[2] )
+        self.t3 = conv( pre_chls[3], chls[3] )
+        self.t4 = conv( pre_chls[4], chls[4] )
         self.conv1 = nn.Sequential( *[ conv(chls[4], chls[4]) for _ in range(2) ] )
         self.conv2 = tconv( chls[4], chls[3] )
         self.conv3 = nn.Sequential( *[ conv(chls[3], chls[3]) for _ in range(2) ] )
@@ -68,6 +75,11 @@ class Reg( nn.Module ):
         self.apply( weight_init )
 
     def forward( self, x0, x1, x2, x3, x4 ):
+        x0 = self.t0( x0 )
+        x1 = self.t1( x1 )
+        x2 = self.t2( x2 )
+        x3 = self.t3( x3 )
+        x4 = self.t4( x4 )
         x4 = self.conv2( self.conv1( x4 ) )
         x3 = self.conv3( x3 )
         x = torch.cat([x4, x3], 1)
@@ -81,7 +93,7 @@ class Reg( nn.Module ):
         x = torch.cat([x, x0], 1)
         x = self.conv9( x )
         x = self.conv10( x )
-        x = nn.Sigmoid()(x + 1)
+        x = nn.Sigmoid()(x)
         return x
 
 class Net( nn.Module ):

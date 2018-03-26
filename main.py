@@ -42,7 +42,7 @@ parser.add_argument( '--pretrained', type=str, metavar='PATH' )
 parser.add_argument( '--resume', type=str, metavar='PATH' )
 parser.add_argument( '--momentum', type=float, default=0.9, help='momentum in optim' )
 parser.add_argument( '--weight-decay', type=float, default=1e-4, help='weight decay' )
-parser.add_argument( '--L1', dest='L1', action='store_true', help='adding L1-loss on mask' )
+parser.add_argument( '--L1', type=float, default=0, help='adding L1-loss on mask' )
 parser.add_argument('--print-freq', '-p', default=10, type=int, metavar='N', help='print frequency (default: 10)')
 parser.add_argument( '--evaluation',dest='evaluation',action='store_true' )
 parser.add_argument( '--print-mask',dest='print_mask',action='store_true' )
@@ -95,7 +95,7 @@ class Env():
                 self.optimizer_cls.load_state_dict( checkpoint['optimizer_cls'] )
                 self.optimizer_reg.load_state_dict( checkpoint['optimizer_reg'] )
                 logger.info( '=> loaded checkpoint from {} (iter {})'.format(
-                    args.resume, self.it) )
+                    args.resume, max(self.it, self.reg_it) ) )
             else:
                 raise Exception("No checkpoint found. Check your resume path.")
 
@@ -253,8 +253,7 @@ class Env():
             loss1 = self.criterion( pred0, gt )
             loss2 = self.criterion( pred1, gt )
             loss = loss1 + loss2
-            if self.args.L1:
-                loss += mask.mean() * 0.1
+            loss += mask.mean(0).sum() * self.args.L1
             losses.update( loss.data[0], inp.size(0) )
             loss.backward()
             self.optimizer_reg.step()
@@ -292,8 +291,8 @@ class Env():
             if stage == 0:
                 loss2 *= 0
             loss = loss1 + loss2
-            if stage != 0 and self.args.L1:
-                loss += mask.mean() * 0.1
+            if stage != 0:
+                loss += mask.mean(0).sum() * self.args.L1 
             losses.update( loss.data[0], inp.size(0) )
             loss.backward()
             self.optimizer_cls.step()
@@ -386,15 +385,9 @@ class Env():
                 for pic, img, j in zip(mask, inp, range(mask.shape[0])):
                     if cnt == 100:
                         break
-                    #if pred0[j] == gt[j]:
+                    #if gt[j] != 388:
                     #    continue
                     print("pred0:{}, pred1:{}, gt:{}".format( pred0[j], pred1[j], gt[j] ))
-                    pic = pic[0]
-                    #print(pic)
-                    #pic /= pic.max()
-                    pic *= 255
-                    pic = pic.astype( np.uint8 )
-                    pic = cv2.applyColorMap( pic, cv2.COLORMAP_JET )
                     if self.args.dataset == 'mnist':
                         img = (img[0] + 0.5) * 255
                     elif self.args.dataset == 'cifar10':
@@ -402,10 +395,27 @@ class Env():
                         mean = np.array([x/255.0 for x in [125.3, 123.0, 113.9]])
                         std  = np.array([x/255.0 for x in [63.0, 62.1, 66.7]])
                         img = (img * std + mean) * 255
+                    elif self.args.dataset == 'imgnet':
+                        img1 = img * pic[0]
+                        img = img.transpose( 1, 2, 0 )
+                        img1 = img1.transpose( 1, 2, 0 )
+                        mean = np.array([0.485, 0.456, 0.406])
+                        std  = np.array([0.229, 0.224, 0.225])
+                        img = (img * std + mean) * 255
+                        img1 = (img1 * std + mean) * 255
+                        img1 = img1.astype( np.uint8 )
+                    pic = pic[0]
+                    #print(pic)
+                    #pic /= pic.max()
+                    pic = (pic > pic.mean()).astype( np.float32 )
+                    pic *= 255
+                    pic = pic.astype( np.uint8 )
+                    #pic = cv2.applyColorMap( pic, cv2.COLORMAP_JET )
 
                     img = img.astype( np.uint8 )
                     cv2.imshow( 'x', pic )
                     cv2.imshow( 'y', img )
+                    cv2.imshow( 'z', img1 )
                     cv2.waitKey(0)
                     cnt += 1
                     
