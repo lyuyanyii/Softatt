@@ -391,10 +391,18 @@ class Env():
                     print("pred0:{}, pred1:{}, gt:{}".format( pred0[j], pred1[j], gt[j] ))
                     pic = pic[0]
                     #print(pic)
-                    pic /= pic.max()
+                    #pic /= pic.max()
                     pic *= 255
                     pic = pic.astype( np.uint8 )
-                    img = (img[0] + 0.5) * 255
+                    pic = cv2.applyColorMap( pic, cv2.COLORMAP_JET )
+                    if self.args.dataset == 'mnist':
+                        img = (img[0] + 0.5) * 255
+                    elif self.args.dataset == 'cifar10':
+                        img = img.transpose( 1, 2, 0 )
+                        mean = np.array([x/255.0 for x in [125.3, 123.0, 113.9]])
+                        std  = np.array([x/255.0 for x in [63.0, 62.1, 66.7]])
+                        img = (img * std + mean) * 255
+
                     img = img.astype( np.uint8 )
                     cv2.imshow( 'x', pic )
                     cv2.imshow( 'y', img )
