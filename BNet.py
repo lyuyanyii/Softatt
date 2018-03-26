@@ -107,7 +107,7 @@ class Reg(nn.Module):
         x = self.conv6( torch.cat([x2, x1], 1) )
         x0 = self.conv8( self.conv7( x0 ) )
         x = self.conv9( torch.cat([x0, x], 1) )
-        mask = nn.Sigmoid()( x + 1 )
+        mask = nn.Sigmoid()( x )
         return mask
 
 class Net(nn.Module):

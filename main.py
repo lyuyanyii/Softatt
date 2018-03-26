@@ -224,7 +224,7 @@ class Env():
             loss.backward()
             self.optimizer_cls.step()
             if self.it % self.args.print_freq == 0:
-                log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val} ({loss.avg})'.format( iter=self.it, loss=losses )
+                log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val:.5f} ({loss.avg:.5f})'.format( iter=self.it, loss=losses )
                 self.logger.info( log_str )
             if self.it >= self.args.tot_iter:
                 return
@@ -258,7 +258,7 @@ class Env():
             loss.backward()
             self.optimizer_reg.step()
             if self.reg_it % self.args.print_freq == 0:
-                log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val} ({loss.avg}), Loss1:{loss1}, Loss2:{loss2}'.format( iter=self.reg_it, loss=losses, loss1=loss1.data[0], loss2=loss2.data[0] )
+                log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val:.5f} ({loss.avg:.5f}), Loss1:{loss1:.5f}, Loss2:{loss2:.5f}, Loss2-Loss1:{dif:.5f}'.format( iter=self.reg_it, loss=losses, loss1=loss1.data[0], loss2=loss2.data[0], dif=loss2.data[0]-loss1.data[0] )
                 self.logger.info( log_str )
             if self.reg_it >= self.args.tot_iter:
                 return
@@ -299,7 +299,7 @@ class Env():
             if stage > 0:
                 self.optimizer_reg.step()
             if self.it % self.args.print_freq == 0:
-                log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val} ({loss.avg}), Loss1:{loss1}, Loss2:{loss2}'.format( iter=self.it, loss=losses, loss1=loss1.data[0], loss2=loss2.data[0] )
+                log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val:.5f} ({loss.avg:.5f}), Loss1:{loss1:.5f}, Loss2:{loss2:.5f}, Loss2-Loss1:{dif:.5f}'.format( iter=self.it, loss=losses, loss1=loss1.data[0], loss2=loss2.data[0], dif=loss2.data[0]-loss1.data[0] )
                 self.logger.info( log_str )
 
             if self.it >= self.args.tot_iter:
@@ -363,8 +363,8 @@ class Env():
 
         cnt = 0
         for i, batch in tqdm.tqdm(enumerate(self.valid_loader)):
-            inp = Variable( batch[0] ).cuda()
-            gt  = Variable( batch[1] ).cuda()
+            inp = Variable( batch[0], volatile=True ).cuda()
+            gt  = Variable( batch[1], volatile=True ).cuda()
 
             pred0, pred1, mask = self.model( inp )
             score0, pred0 = torch.max( pred0, 1 )
