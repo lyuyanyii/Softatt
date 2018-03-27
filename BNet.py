@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
-from utils import weight_init
+from utils import weight_init, Binarized
 
 class DenseLayer(nn.Module):
     def __init__(self, inp_chl, growth_rate, bn_size = 4):
@@ -117,7 +117,7 @@ class Net(nn.Module):
         self.cls = Cls()
         self.reg = Reg( self.cls.chl1, self.cls.chl2, self.cls.chl3 )
 
-    def forward( self, x, stage = 1 ):
+    def forward( self, x, stage = 1, binary = False ):
         x0, x1, x2, pred0 = self.cls(x)
         
         if stage == 0:
@@ -125,6 +125,9 @@ class Net(nn.Module):
 
         mask = self.reg( x0, x1, x2 )
 
+        if binary:
+            b = Binarized()
+            mask = b( mask )
         x = x * mask.expand( x.size() )
 
         x0, x1, x2, pred1 = self.cls(x)

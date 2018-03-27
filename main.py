@@ -50,6 +50,7 @@ parser.add_argument( '--no-mask',dest='no_mask',action='store_true' )
 parser.add_argument( '--advtrain',dest='advtrain',action='store_true', help='using a training strategy as GAN' )
 parser.add_argument( '--joint',dest='joint',action='store_true',help='jointly trainging' )
 parser.add_argument( '--trained-cls', dest='trained_cls', action='store_true' )
+parser.add_argument( '--binary', dest='binary', action='store_true' )
 
 class Env():
     def __init__(self, args):
@@ -248,7 +249,10 @@ class Env():
             inp = Variable(batch[0]).cuda()
             gt = Variable(batch[1]).cuda()
 
-            pred0, pred1, mask = self.model( inp, 1 )
+            if not self.args.binary:
+                pred0, pred1, mask = self.model( inp, 1 )
+            else:
+                pred0, pred1, mask = self.model( inp, 1, True )
 
             loss1 = self.criterion( pred0, gt )
             loss2 = self.criterion( pred1, gt )
@@ -284,7 +288,10 @@ class Env():
             gt = Variable(batch[1]).cuda()
 
             stage = (self.it % 5 == 0)
-            pred0, pred1, mask = self.model( inp, stage )
+            if not self.args.binary:
+                pred0, pred1, mask = self.model( inp, stage )
+            else:
+                pred0, pred1, mask = self.model( inp, stage, True )
 
             loss1 = self.criterion( pred0, gt )
             loss2 = self.criterion( pred1, gt )
@@ -391,10 +398,14 @@ class Env():
                     if self.args.dataset == 'mnist':
                         img = (img[0] + 0.5) * 255
                     elif self.args.dataset == 'cifar10':
+                        img1 = img * pic[0]
                         img = img.transpose( 1, 2, 0 )
+                        img1 = img1.transpose( 1, 2, 0 )
                         mean = np.array([x/255.0 for x in [125.3, 123.0, 113.9]])
                         std  = np.array([x/255.0 for x in [63.0, 62.1, 66.7]])
                         img = (img * std + mean) * 255
+                        img1 = (img1 * std + mean) * 255
+                        img1 = img1.astype( np.uint8 )
                     elif self.args.dataset == 'imgnet':
                         img1 = img * pic[0]
                         img = img.transpose( 1, 2, 0 )
@@ -405,12 +416,12 @@ class Env():
                         img1 = (img1 * std + mean) * 255
                         img1 = img1.astype( np.uint8 )
                     pic = pic[0]
-                    #print(pic)
+                    print(pic)
                     #pic /= pic.max()
-                    pic = (pic > pic.mean()).astype( np.float32 )
+                    #pic = (pic > pic.mean()).astype( np.float32 )
                     pic *= 255
                     pic = pic.astype( np.uint8 )
-                    #pic = cv2.applyColorMap( pic, cv2.COLORMAP_JET )
+                    pic = cv2.applyColorMap( pic, cv2.COLORMAP_JET )
 
                     img = img.astype( np.uint8 )
                     cv2.imshow( 'x', pic )

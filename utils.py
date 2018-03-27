@@ -5,6 +5,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 import shutil
 
+from torch.autograd import Function
+
+class Binarized( Function ):
+    def forward( self, x ):
+        output = torch.round( x )
+        return output
+
+    def backward( self, output_grad ):
+        return output_grad
+
+
 def cls_zero_grad( m ):
     if hasattr(m, 'cls'):
         m.zero_grad()
