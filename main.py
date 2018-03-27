@@ -51,6 +51,8 @@ parser.add_argument( '--advtrain',dest='advtrain',action='store_true', help='usi
 parser.add_argument( '--joint',dest='joint',action='store_true',help='jointly trainging' )
 parser.add_argument( '--trained-cls', dest='trained_cls', action='store_true' )
 parser.add_argument( '--binary', dest='binary', action='store_true' )
+parser.add_argument( '--grad-check',dest='grad_check',action='store_true' )
+parser.add_argument( '--single-batch-exp',dest='single_batch_exp',action='store_true')
 
 class Env():
     def __init__(self, args):
@@ -160,6 +162,10 @@ class Env():
             tot_epoch1 = 0
         if args.evaluation:
             self.valid()
+        elif args.grad_check:
+            self.grad_check()
+        elif args.single_batch_exp:
+            self.single_batch_exp()
         elif args.joint or args.advtrain:
             for i in range(tot_epoch1):
                 if args.advtrain:
@@ -231,9 +237,11 @@ class Env():
                 return
 
     def train_reg( self ):
+        self.model.module.reg.apply( utils.weight_init )
         logger = self.logger
         logger.info("Mask Training Epoch")
         losses = AverageMeter()
+        diff = AverageMeter()
         self.model.train()
         self.model.module.cls.eval()
         for param in self.model.module.cls.parameters():
@@ -254,15 +262,19 @@ class Env():
             else:
                 pred0, pred1, mask = self.model( inp, 1, True )
 
+            print(mask[0])
+            input()
             loss1 = self.criterion( pred0, gt )
             loss2 = self.criterion( pred1, gt )
             loss = loss1 + loss2
             loss += mask.mean(0).sum() * self.args.L1
+            diff0 = loss2 - loss1
             losses.update( loss.data[0], inp.size(0) )
+            diff.update( diff0.data[0], inp.size(0) )
             loss.backward()
             self.optimizer_reg.step()
             if self.reg_it % self.args.print_freq == 0:
-                log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val:.5f} ({loss.avg:.5f}), Loss1:{loss1:.5f}, Loss2:{loss2:.5f}, Loss2-Loss1:{dif:.5f}'.format( iter=self.reg_it, loss=losses, loss1=loss1.data[0], loss2=loss2.data[0], dif=loss2.data[0]-loss1.data[0] )
+                log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val:.5f} ({loss.avg:.5f}), Loss1:{loss1:.5f}, Loss2:{loss2:.5f}, Loss2-Loss1:{dif.val:.5f} ({dif.avg:.5f})'.format( iter=self.reg_it, loss=losses, loss1=loss1.data[0], loss2=loss2.data[0], dif=diff )
                 self.logger.info( log_str )
             if self.reg_it >= self.args.tot_iter:
                 return
@@ -311,6 +323,114 @@ class Env():
 
             if self.it >= self.args.tot_iter:
                 return
+
+    def single_batch_exp( self ):
+        self.model.train()
+        class Mask(nn.Module):
+            def __init__(self):
+                super().__init__()
+                mask = torch.ones( 64, 1, 32, 32 )
+                self.mask = nn.Parameter( mask, requires_grad=True )
+
+            def forward( self, x ):
+                x = x * self.mask.expand( x.size() )
+                return x
+        mask = Mask()
+        mask = mask.cuda()
+        optimizer = optim.SGD( mask.parameters(), lr=100, momentum=0.9 )
+        prebatch = None
+        for i, batch in enumerate(self.train_loader):
+            optimizer.zero_grad()
+            if prebatch is not None:
+                batch = prebatch
+            prebatch = batch
+            
+            inp = Variable(batch[0], requires_grad = True).cuda()
+            gt = Variable(batch[1]).cuda()
+            
+            inp = mask( inp )
+            pred0, pred1, _ = self.model( inp, 0 )
+            loss = self.criterion( pred0, gt )
+            loss.backward()
+            optimizer.step()
+            print(i)
+            print( mask.mask.grad.mean(0) )
+            input()
+            if i >= 10:
+                break
+        for pic, img in zip(mask.mask, batch[0]):
+            img = img.type(torch.FloatTensor)
+            img = img.numpy()
+            img = img.transpose( 1, 2, 0 )
+            mean = np.array([x/255.0 for x in [125.3, 123.0, 113.9]])
+            std  = np.array([x/255.0 for x in [63.0, 62.1, 66.7]])
+            img = (img * std + mean) * 255
+            img = img.astype(np.uint8)
+
+            pic = pic[0].type( torch.FloatTensor )
+            print(pic)
+            print(pic.max())
+            print(pic.min())
+            print(pic.mean())
+            pic = pic.data.numpy()
+            pic -= pic.min()
+            pic /= pic.max()
+            pic *= 255
+            pic = pic.astype( np.uint8 )
+            pic = cv2.applyColorMap( pic, cv2.COLORMAP_JET )
+            cv2.imshow('x', pic)
+            cv2.imshow('y', img)
+            cv2.waitKey(0)
+
+    def grad_check( self ):
+        self.model.train()
+        for i, batch in enumerate(self.train_loader):
+            self.optimizer_cls.zero_grad()
+            self.optimizer_reg.zero_grad()
+            
+            inp = Variable(batch[0], requires_grad = True).cuda()
+            gt = Variable(batch[1]).cuda()
+
+            mask = torch.ones( inp.size(0), 1, inp.size(2), inp.size(3) )
+            mask = Variable( mask, requires_grad = True ).cuda()
+
+            inp1 = inp * mask.expand( inp.size() )
+
+            pred0, pred1, _ = self.model( inp1, 0 )
+
+            loss = self.criterion( pred0, gt )
+            #loss.backward()
+            
+            """
+            print(loss)
+            print(mask.requires_grad)
+            print(inp1.requires_grad)
+            for param in self.model.module.parameters():
+                print( param.grad is not None )
+            """
+            grad = torch.autograd.grad( outputs=loss, inputs=mask, grad_outputs=torch.ones(1).cuda(), create_graph = True, retain_graph = True, only_inputs = True )[0]
+            print(grad.size())
+            for pic, img in zip(grad, batch[0]):
+                img = img.transpose( 1, 2, 0 )
+                mean = np.array([x/255.0 for x in [125.3, 123.0, 113.9]])
+                std  = np.array([x/255.0 for x in [63.0, 62.1, 66.7]])
+                img = (img * std + mean) * 255
+                img = img.astype(np.uint8)
+
+                pic = pic[0]
+                print(pic)
+                print(pic.mean(), pic.max(), pic.min())
+                pic = pic.type( torch.FloatTensor )
+                pic = pic.data.numpy()
+                pic -= pic.min()
+                pic /= pic.max()
+                pic *= 255
+                pic = pic.astype(np.uint8)
+                pic = cv2.applyColorMap( pic, cv2.COLORMAP_JET )
+                cv2.imshow('x', pic)
+                cv2.imshow('y', img)
+                cv2.waitKey(0)
+
 
     def train_single( self ):
         logger = self.logger
@@ -373,7 +493,11 @@ class Env():
             inp = Variable( batch[0], volatile=True ).cuda()
             gt  = Variable( batch[1], volatile=True ).cuda()
 
-            pred0, pred1, mask = self.model( inp )
+            print("AAAAA")
+            if not self.args.binary:
+                pred0, pred1, mask = self.model( inp )
+            else:
+                pred0, pred1, mask = self.model( inp, stage=1, binary=self.args.binary )
             score0, pred0 = torch.max( pred0, 1 )
             score1, pred1 = torch.max( pred1, 1 )
             acc0 = (pred0 == gt).type( torch.FloatTensor ).mean()
