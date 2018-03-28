@@ -520,7 +520,7 @@ class Env():
                     if cnt == 300:
                         break
                     #if gt[j] == pred0[j]:
-                        continue
+                    #    continue
                     print("pred0:{}, pred1:{}, gt:{}".format( pred0[j], pred1[j], gt[j] ))
                     if self.args.dataset == 'mnist':
                         img = (img[0] + 0.5) * 255
@@ -557,9 +557,9 @@ class Env():
                         cv2.imshow( 'z', img1 )
                         cv2.waitKey(0)
                     else:
-                        cv2.imwrite( 'images_wrong/{}_gt{}_pred{}_inp.png'.format(cnt, gt[j], pred0[j]), img )
-                        cv2.imwrite( 'images_wrong/{}_gt{}_pred{}_mask.png'.format(cnt, gt[j], pred0[j]), pic )
-                        cv2.imwrite( 'images_wrong/{}_gt{}_pred{}_masked_inp.png'.format(cnt, gt[j], pred0[j]), img1 )
+                        cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_inp.png'.format(cnt, gt[j], pred0[j]), img )
+                        cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_mask.png'.format(cnt, gt[j], pred0[j]), pic )
+                        cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_masked_inp.png'.format(cnt, gt[j], pred0[j]), img1 )
                     cnt += 1
                     
         log_str = "VAL FINAL -> Accuracy0: {}, Accuracy1: {}".format( accs0.avg, accs1.avg )
