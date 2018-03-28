@@ -103,7 +103,7 @@ class Net( nn.Module ):
         self.cls = Cls()
         self.reg = Reg()
 
-    def forward( self, x, stage = 1 ):
+    def forward( self, x, stage = 1, binary=False, single=True ):
         x0, x1, x2, x3, x4, pred0 = self.cls(x)
 
         if stage == 0:

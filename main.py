@@ -53,6 +53,8 @@ parser.add_argument( '--trained-cls', dest='trained_cls', action='store_true' )
 parser.add_argument( '--binary', dest='binary', action='store_true' )
 parser.add_argument( '--grad-check',dest='grad_check',action='store_true' )
 parser.add_argument( '--single-batch-exp',dest='single_batch_exp',action='store_true')
+parser.add_argument( '--save-img', dest='save_img', action='store_true' )
+parser.add_argument( '--double', dest='double', action='store_true', help='using mask & 1-mask to compute 2 losses' )
 
 class Env():
     def __init__(self, args):
@@ -257,16 +259,17 @@ class Env():
             inp = Variable(batch[0]).cuda()
             gt = Variable(batch[1]).cuda()
 
-            if not self.args.binary:
-                pred0, pred1, mask = self.model( inp, 1 )
+            if not self.args.double:
+                pred0, pred1, mask = self.model( inp, 1, self.args.binary )
+                pred2 = None
             else:
-                pred0, pred1, mask = self.model( inp, 1, True )
+                pred0, pred1, pred2, mask = self.model( inp, 1, self.args.binary, single=False )
 
-            print(mask[0])
-            input()
             loss1 = self.criterion( pred0, gt )
             loss2 = self.criterion( pred1, gt )
             loss = loss1 + loss2
+            if pred2 is not None:
+                loss -= self.criterion( pred2, gt ) * 0.01
             loss += mask.mean(0).sum() * self.args.L1
             diff0 = loss2 - loss1
             losses.update( loss.data[0], inp.size(0) )
@@ -493,7 +496,7 @@ class Env():
             inp = Variable( batch[0], volatile=True ).cuda()
             gt  = Variable( batch[1], volatile=True ).cuda()
 
-            print("AAAAA")
+            #print("AAAAA")
             if not self.args.binary:
                 pred0, pred1, mask = self.model( inp )
             else:
@@ -514,10 +517,10 @@ class Env():
                 inp = inp.type( torch.FloatTensor )
                 inp = inp.data.numpy()
                 for pic, img, j in zip(mask, inp, range(mask.shape[0])):
-                    if cnt == 100:
+                    if cnt == 300:
                         break
-                    #if gt[j] != 388:
-                    #    continue
+                    #if gt[j] == pred0[j]:
+                        continue
                     print("pred0:{}, pred1:{}, gt:{}".format( pred0[j], pred1[j], gt[j] ))
                     if self.args.dataset == 'mnist':
                         img = (img[0] + 0.5) * 255
@@ -548,10 +551,15 @@ class Env():
                     pic = cv2.applyColorMap( pic, cv2.COLORMAP_JET )
 
                     img = img.astype( np.uint8 )
-                    cv2.imshow( 'x', pic )
-                    cv2.imshow( 'y', img )
-                    cv2.imshow( 'z', img1 )
-                    cv2.waitKey(0)
+                    if not self.args.save_img:
+                        cv2.imshow( 'x', pic )
+                        cv2.imshow( 'y', img )
+                        cv2.imshow( 'z', img1 )
+                        cv2.waitKey(0)
+                    else:
+                        cv2.imwrite( 'images_wrong/{}_gt{}_pred{}_inp.png'.format(cnt, gt[j], pred0[j]), img )
+                        cv2.imwrite( 'images_wrong/{}_gt{}_pred{}_mask.png'.format(cnt, gt[j], pred0[j]), pic )
+                        cv2.imwrite( 'images_wrong/{}_gt{}_pred{}_masked_inp.png'.format(cnt, gt[j], pred0[j]), img1 )
                     cnt += 1
                     
         log_str = "VAL FINAL -> Accuracy0: {}, Accuracy1: {}".format( accs0.avg, accs1.avg )
