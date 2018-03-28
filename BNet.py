@@ -117,7 +117,7 @@ class Net(nn.Module):
         self.cls = Cls()
         self.reg = Reg( self.cls.chl1, self.cls.chl2, self.cls.chl3 )
 
-    def forward( self, x, stage = 1, binary = False ):
+    def forward( self, x, stage = 1, binary = False, single = True ):
         x0, x1, x2, pred0 = self.cls(x)
         
         if stage == 0:
@@ -128,8 +128,15 @@ class Net(nn.Module):
         if binary:
             b = Binarized()
             mask = b( mask )
-        x = x * mask.expand( x.size() )
+        x_pos = x * mask.expand( x.size() )
 
-        x0, x1, x2, pred1 = self.cls(x)
+        x0, x1, x2, pred1 = self.cls(x_pos)
+        
+        if single:
+            return pred0, pred1, mask
 
-        return pred0, pred1, mask
+        x_neg = x * (1 - mask.expand(x.size()))
+
+        x0, x1, x2, pred2 = self.cls(x_neg)
+
+        return pred0, pred1, pred2, mask
