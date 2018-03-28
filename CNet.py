@@ -17,9 +17,9 @@ model_urls = {
 class Cls( nn.Module ):
     def __init__( self, pretrained = True ):
         super().__init__()
-        resnet = models.resnet50()
+        resnet = models.resnet18()
         if pretrained:
-            resnet.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
+            resnet.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
         self.conv1 = nn.Sequential( resnet.conv1, resnet.bn1, resnet.relu )
         self.layer0 = nn.Sequential( resnet.maxpool, resnet.layer1 )
         self.layer1, self.layer2, self.layer3 = resnet.layer2, resnet.layer3, resnet.layer4
@@ -55,7 +55,7 @@ def tconv( inp_chl, out_chl, ker_size = 4, stride = 2, padding = 1 ):
 class Reg( nn.Module ):
     def __init__( self ):
         super().__init__()
-        pre_chls = [64, 256, 512, 1024, 2048]
+        pre_chls = [64, 64, 128, 256, 512]
         chls = [64//4, 256//4, 512//4, 1024//4, 2048//4]
         self.t0 = conv( pre_chls[0], chls[0] )
         self.t1 = conv( pre_chls[1], chls[1] )
