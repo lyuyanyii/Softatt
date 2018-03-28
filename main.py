@@ -85,6 +85,7 @@ class Env():
         self.optimizer_cls = optim.SGD( model.module.cls.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay )
         self.optimizer_reg = optim.SGD( model.module.reg.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay )
         self.criterion = nn.CrossEntropyLoss().cuda()
+        self.entropy = utils.Entropy().cuda()
 
         self.it = 0
         self.reg_it = 0
@@ -239,7 +240,6 @@ class Env():
                 return
 
     def train_reg( self ):
-        self.model.module.reg.apply( utils.weight_init )
         logger = self.logger
         logger.info("Mask Training Epoch")
         losses = AverageMeter()
@@ -269,7 +269,8 @@ class Env():
             loss2 = self.criterion( pred1, gt )
             loss = loss1 + loss2
             if pred2 is not None:
-                loss -= self.criterion( pred2, gt ) * 0.01
+                #loss -= self.criterion( pred2, gt ) * 0.01
+                loss -= self.entropy( pred2 ) * 0.1
             loss += mask.mean(0).sum() * self.args.L1
             diff0 = loss2 - loss1
             losses.update( loss.data[0], inp.size(0) )

@@ -15,6 +15,13 @@ class Binarized( Function ):
     def backward( self, output_grad ):
         return output_grad
 
+class Entropy( nn.Module ):
+    def __init__( self ):
+        super().__init__()
+    def forward( self, x ):
+        x = nn.Softmax()(x)
+        loss = (-x * torch.log(x)).sum(1).mean(0)
+        return loss
 
 def cls_zero_grad( m ):
     if hasattr(m, 'cls'):
