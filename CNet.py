@@ -17,9 +17,9 @@ model_urls = {
 class Cls( nn.Module ):
     def __init__( self, pretrained = True ):
         super().__init__()
-        resnet = models.resnet50()
+        resnet = models.resnet18()
         if pretrained:
-            resnet.load_state_dict(model_zoo.load_url(model_urls['resnet50']))
+            resnet.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
         self.conv1 = nn.Sequential( resnet.conv1, resnet.bn1, resnet.relu )
         self.layer0 = nn.Sequential( resnet.maxpool, resnet.layer1 )
         self.layer1, self.layer2, self.layer3 = resnet.layer2, resnet.layer3, resnet.layer4
