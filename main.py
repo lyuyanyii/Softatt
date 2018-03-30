@@ -55,6 +55,7 @@ parser.add_argument( '--grad-check',dest='grad_check',action='store_true' )
 parser.add_argument( '--single-batch-exp',dest='single_batch_exp',action='store_true')
 parser.add_argument( '--save-img', dest='save_img', action='store_true' )
 parser.add_argument( '--double', dest='double', action='store_true', help='using mask & 1-mask to compute 2 losses' )
+parser.add_argument( '--threshold',type=int,default=1,help='threshold in evaluation' )
 
 class Env():
     def __init__(self, args):
@@ -85,6 +86,7 @@ class Env():
         self.optimizer_cls = optim.SGD( model.module.cls.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay )
         self.optimizer_reg = optim.SGD( model.module.reg.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay )
         self.criterion = nn.CrossEntropyLoss().cuda()
+        self.entropy = utils.Entropy().cuda()
 
         self.it = 0
         self.reg_it = 0
@@ -239,7 +241,6 @@ class Env():
                 return
 
     def train_reg( self ):
-        self.model.module.reg.apply( utils.weight_init )
         logger = self.logger
         logger.info("Mask Training Epoch")
         losses = AverageMeter()
@@ -269,7 +270,8 @@ class Env():
             loss2 = self.criterion( pred1, gt )
             loss = loss1 + loss2
             if pred2 is not None:
-                loss -= self.criterion( pred2, gt ) * 0.01
+                #loss -= self.criterion( pred2, gt ) * 0.01
+                loss -= self.entropy( pred2 ) * 0.1
             loss += mask.mean(0).sum() * self.args.L1
             diff0 = loss2 - loss1
             losses.update( loss.data[0], inp.size(0) )
@@ -484,6 +486,25 @@ class Env():
             if self.it >= self.args.tot_iter:
                 return
 
+    def toRGB( self, img ):
+        if isinstance(img, Variable):
+            img = img.type( torch.FloatTensor )
+            img = img.data.numpy()
+        if self.args.dataset == 'mnist':
+            img = (img[0] + 0.5) * 255
+        elif self.args.dataset == 'cifar10':
+            img = img.transpose( 1, 2, 0 )
+            mean = np.array([x/255.0 for x in [125.3, 123.0, 113.9]])
+            std  = np.array([x/255.0 for x in [63.0, 62.1, 66.7]])
+            img = (img * std + mean) * 255
+        elif self.args.dataset == 'imgnet':
+            img = img.transpose( 1, 2, 0 )
+            mean = np.array([0.485, 0.456, 0.406])
+            std  = np.array([0.229, 0.224, 0.225])
+            img = (img * std + mean) * 255
+        img = img.astype(np.uint8)
+        return img
+
     def valid( self ):
         logger = self.logger
         self.model.eval()
@@ -511,6 +532,37 @@ class Env():
             pred0 = pred0.type( torch.LongTensor ).data.numpy()
             pred1 = pred1.type( torch.LongTensor ).data.numpy()
             gt = gt.type( torch.LongTensor ).data.numpy()
+            if self.args.threshold != 1:
+                sale = mask[0].type( torch.FloatTensor )
+                sale = sale.data.numpy().reshape(-1)
+                sale = sorted(sale)
+                inp = inp[0:1]
+                gt = gt[0:1]
+                mask = mask[0:1]
+                label = pred0[0]
+                for i in range( self.args.threshold ):
+                    p = sale[ int(len(sale) / self.args.threshold * i) ]
+                    mask_b = (mask > float(p)).type( torch.cuda.FloatTensor )
+                    print( mask_b )
+                    inp_b = inp * mask_b.expand( inp.size() )
+                    pred0, pred1, _ = self.model( x=inp_b, stage=0 )
+                    score0, pred0 = torch.max( pred0, 1 )
+                    pred0 = pred0.type( torch.LongTensor ).data.numpy()
+                    print("full:{}, pred:{}, gt:{}".format( label, pred0[0], gt[0] ))
+                    mask_b = mask_b[0, 0]
+                    mask_b = mask_b.type(torch.FloatTensor).data.numpy()
+                    mask_b *= 255
+                    mask_b = mask_b.astype( np.uint8 )
+                    mask_b = cv2.applyColorMap( mask_b, cv2.COLORMAP_JET )
+
+                    img = self.toRGB( inp[0] )
+                    img1 = self.toRGB( inp_b[0] )
+                    cv2.imshow('x', mask_b)
+                    cv2.imshow('y', img)
+                    cv2.imshow('z', img1)
+                    cv2.waitKey(0)
+
+
             if self.args.print_mask:
                 mask = mask.type( torch.FloatTensor )
                 mask = mask.data.numpy()
@@ -522,26 +574,9 @@ class Env():
                     #if gt[j] == pred0[j]:
                     #    continue
                     print("pred0:{}, pred1:{}, gt:{}".format( pred0[j], pred1[j], gt[j] ))
-                    if self.args.dataset == 'mnist':
-                        img = (img[0] + 0.5) * 255
-                    elif self.args.dataset == 'cifar10':
-                        img1 = img * pic[0]
-                        img = img.transpose( 1, 2, 0 )
-                        img1 = img1.transpose( 1, 2, 0 )
-                        mean = np.array([x/255.0 for x in [125.3, 123.0, 113.9]])
-                        std  = np.array([x/255.0 for x in [63.0, 62.1, 66.7]])
-                        img = (img * std + mean) * 255
-                        img1 = (img1 * std + mean) * 255
-                        img1 = img1.astype( np.uint8 )
-                    elif self.args.dataset == 'imgnet':
-                        img1 = img * pic[0]
-                        img = img.transpose( 1, 2, 0 )
-                        img1 = img1.transpose( 1, 2, 0 )
-                        mean = np.array([0.485, 0.456, 0.406])
-                        std  = np.array([0.229, 0.224, 0.225])
-                        img = (img * std + mean) * 255
-                        img1 = (img1 * std + mean) * 255
-                        img1 = img1.astype( np.uint8 )
+                    img1 = img * pic[0]
+                    img = self.toRGB( img )
+                    img1 = self.toRGB( img1 )
                     pic = pic[0]
                     print(pic)
                     #pic /= pic.max()
