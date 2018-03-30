@@ -241,7 +241,6 @@ class Env():
                 return
 
     def train_reg( self ):
-        model.module.reg.apply( weight_init )
         logger = self.logger
         logger.info("Mask Training Epoch")
         losses = AverageMeter()
