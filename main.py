@@ -22,6 +22,7 @@ import torch.nn.functional as F
 
 from torch.autograd import Variable
 import tqdm
+#import matplotlib.pyplot as plt
 
 model_names = ['A', 'B', 'C']
 
@@ -56,6 +57,8 @@ parser.add_argument( '--single-batch-exp',dest='single_batch_exp',action='store_
 parser.add_argument( '--save-img', dest='save_img', action='store_true' )
 parser.add_argument( '--double', dest='double', action='store_true', help='using mask & 1-mask to compute 2 losses' )
 parser.add_argument( '--threshold',type=int,default=1,help='threshold in evaluation' )
+parser.add_argument( '--noise',dest='noise',action='store_true', help='adding noise when training mask' )
+parser.add_argument( '--KL', dest='KL', action='store_true', help='using KL-divergence loss' )
 
 class Env():
     def __init__(self, args):
@@ -137,6 +140,7 @@ class Env():
                 traindir,
                 transforms.Compose([
                     transforms.RandomResizedCrop(224),
+                    transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
                     transforms.RandomHorizontalFlip(),
                     transforms.ToTensor(),
                     normalize,
@@ -261,13 +265,16 @@ class Env():
             gt = Variable(batch[1]).cuda()
 
             if not self.args.double:
-                pred0, pred1, mask = self.model( inp, 1, self.args.binary )
+                pred0, pred1, mask = self.model( inp, 1, self.args.binary, noise=self.args.noise )
                 pred2 = None
             else:
-                pred0, pred1, pred2, mask = self.model( inp, 1, self.args.binary, single=False )
+                pred0, pred1, pred2, mask = self.model( inp, 1, self.args.binary, single=False, noise=self.args.noise )
 
             loss1 = self.criterion( pred0, gt )
-            loss2 = self.criterion( pred1, gt )
+            if not self.args.KL:
+                loss2 = self.criterion( pred1, gt )
+            else:
+                loss2 = (pred0 * (torch.log(torch.nn.Softmax()(pred0)) - torch.log(torch.nn.Softmax()(pred1)))).sum(1).mean(0)
             loss = loss1 + loss2
             if pred2 is not None:
                 #loss -= self.criterion( pred2, gt ) * 0.01
@@ -531,8 +538,9 @@ class Env():
 
             pred0 = pred0.type( torch.LongTensor ).data.numpy()
             pred1 = pred1.type( torch.LongTensor ).data.numpy()
-            gt = gt.type( torch.LongTensor ).data.numpy()
-            if self.args.threshold != 1:
+            #gt = gt.type( torch.LongTensor ).data.numpy()
+            if self.args.threshold != 1 and cnt <= 300:
+                cnt += 1
                 sale = mask[0].type( torch.FloatTensor )
                 sale = sale.data.numpy().reshape(-1)
                 sale = sorted(sale)
@@ -540,27 +548,56 @@ class Env():
                 gt = gt[0:1]
                 mask = mask[0:1]
                 label = pred0[0]
+                flag = True
+                loss_list = []
+                acc_list = []
                 for i in range( self.args.threshold ):
                     p = sale[ int(len(sale) / self.args.threshold * i) ]
                     mask_b = (mask > float(p)).type( torch.cuda.FloatTensor )
-                    print( mask_b )
+                    #print( mask_b )
                     inp_b = inp * mask_b.expand( inp.size() )
                     pred0, pred1, _ = self.model( x=inp_b, stage=0 )
+                    loss = self.criterion( pred0, gt )
+                    loss_list.append( loss.data[0] )
                     score0, pred0 = torch.max( pred0, 1 )
                     pred0 = pred0.type( torch.LongTensor ).data.numpy()
-                    print("full:{}, pred:{}, gt:{}".format( label, pred0[0], gt[0] ))
-                    mask_b = mask_b[0, 0]
-                    mask_b = mask_b.type(torch.FloatTensor).data.numpy()
-                    mask_b *= 255
-                    mask_b = mask_b.astype( np.uint8 )
-                    mask_b = cv2.applyColorMap( mask_b, cv2.COLORMAP_JET )
+                    acc_list.append( pred0[0] == int(gt[0]) )
+                    if pred0[0] != label and flag:
+                        flag = False
+                        #pred0 = pred0.type( torch.LongTensor ).data.numpy()
+                        #print("full:{}, pred:{}, gt:{}".format( label, pred0[0], gt[0] ))
+                        mask_b = mask[0, 0]
+                        mask_b = mask_b.type(torch.FloatTensor).data.numpy()
+                        mask_b *= 255
+                        mask_b = mask_b.astype( np.uint8 )
+                        mask_b = cv2.applyColorMap( mask_b, cv2.COLORMAP_JET )
 
-                    img = self.toRGB( inp[0] )
-                    img1 = self.toRGB( inp_b[0] )
-                    cv2.imshow('x', mask_b)
-                    cv2.imshow('y', img)
-                    cv2.imshow('z', img1)
-                    cv2.waitKey(0)
+                        img = self.toRGB( inp[0] )
+                        img1 = self.toRGB( inp_b[0] )
+                        if not self.args.save_img:
+                            cv2.imshow('x', mask_b)
+                            cv2.imshow('y', img)
+                            cv2.imshow('z', img1)
+                            cv2.waitKey(0)
+                        else:
+                            name = '{}_gt{}_pred{}'.format(cnt, int(gt[0]), pred0[0])
+                            cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_inp.png'.format(cnt, int(gt[0]), pred0[0]), img )
+                            cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_mask.png'.format(cnt, int(gt[0]), pred0[0]), mask_b )
+                            cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_masked_inp.png'.format(cnt, int(gt[0]), pred0[0]), img1 )
+                acc_list = np.array(acc_list).astype( np.float64 )
+                loss_list = np.array(loss_list)
+                acc_list *= loss_list.max()
+                #plt.figure(cnt)
+                plt.plot( range(len(loss_list)), loss_list, label='Loss function' )
+                plt.plot( range(len(acc_list)), acc_list, label='Correct' )
+                plt.grid(True)
+                plt.legend()
+                plt.xlabel("Removing Percentage")
+                if not self.args.save_img:
+                    plt.show()
+                else:
+                    plt.savefig( 'images_imgnet/{}_plot.png'.format(name) )
+                plt.close()
 
 
             if self.args.print_mask:

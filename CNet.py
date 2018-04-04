@@ -103,7 +103,7 @@ class Net( nn.Module ):
         self.cls = Cls()
         self.reg = Reg()
 
-    def forward( self, x, stage = 1, binary=False, single=True ):
+    def forward( self, x, stage = 1, binary=False, single=True, noise=False ):
         x0, x1, x2, x3, x4, pred0 = self.cls(x)
 
         if stage == 0:
@@ -111,7 +111,21 @@ class Net( nn.Module ):
 
         mask = self.reg( x0, x1, x2, x3, x4)
 
+        if noise:
+            y = x
+            perm0 = torch.randperm( y.size(0) ).cuda()
+            perm2 = torch.randperm( y.size(2) ).cuda()
+            perm3 = torch.randperm( y.size(3) ).cuda()
+            #y = y[perm0, :, perm2, perm3]
+            y = y[perm0, :, :, :]
+            y = y[:, :, perm2, :]
+            y = y[:, :, :, perm3]
+            y = y.view( x.size() )
+
         x = x * mask.expand( x.size() )
+
+        if noise:
+            x = x + y * (1 - mask.expand( x.size() ) )
 
         x0, x1, x2, x3, x4, pred1 = self.cls(x)
 
