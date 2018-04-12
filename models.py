@@ -8,5 +8,5 @@ def A( **kwargs ):
 def B( **kwargs ):
     return BNet.Net()
 
-def C( **kwargs ):
-    return CNet.Net()
+def C( large_reg, **kwargs ):
+    return CNet.Net(large_reg=large_reg)

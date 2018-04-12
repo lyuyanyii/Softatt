@@ -51,7 +51,6 @@ def tconv( inp_chl, out_chl, ker_size = 4, stride = 2, padding = 1 ):
         nn.ReLU( True ),
         )
 
-
 class Reg( nn.Module ):
     def __init__( self ):
         super().__init__()
@@ -96,12 +95,62 @@ class Reg( nn.Module ):
         x = nn.Sigmoid()(x)
         return x
 
-class Net( nn.Module ):
+class LReg( nn.Module ):
     def __init__( self ):
+        super().__init__()
+        pre_chls = [64, 64, 128, 256, 512]
+        chls = [64//4, 256//4, 512//4, 1024//4, 2048//4]
+        self.t0 = conv( pre_chls[0], chls[0] )
+        self.t1 = conv( pre_chls[1], chls[1] )
+        self.t2 = conv( pre_chls[2], chls[2] )
+        self.t3 = conv( pre_chls[3], chls[3] )
+        self.t4 = conv( pre_chls[4], chls[4] )
+        self.conv1 = nn.Sequential( *[ models.BasicBlock(chls[4], chls[4]) for _ in range(2) ] )
+        self.conv2 = tconv( chls[4], chls[3] )
+        self.conv3_0 = conv( chls[3] * 2, chls[3] )
+        self.conv3 = nn.Sequential( *[ models.BasicBlock(chls[3], chls[3]) for _ in range(2) ] )
+        self.conv4 = tconv( chls[3], chls[2] )
+        self.conv5_0 = conv( chls[2] * 2, chls[2] )
+        self.conv5 = nn.Sequential( *[ models.BasicBlock(chls[2], chls[2]) for _ in range(2) ] )
+        self.conv6 = tconv( chls[2], chls[1] )
+        self.conv7_0 = conv( chls[1] * 2, chls[1] )
+        self.conv7 = nn.Sequential( *[ models.BasicBlock(chls[1], chls[1]) for _ in range(2) ] )
+        self.conv8 = tconv( chls[1], chls[0] )
+        self.conv9 = tconv( chls[0] * 2, chls[0] )
+        self.conv10_0 = conv( chls[0], 10 )
+        self.conv10 = nn.Conv2d( 10, 1, 3, padding = 1 )
+        self.apply( weight_init )
+    def forward( self, x0, x1, x2, x3, x4 ):
+        x0 = self.t0( x0 )
+        x1 = self.t1( x1 )
+        x2 = self.t2( x2 )
+        x3 = self.t3( x3 )
+        x4 = self.t4( x4 )
+        x4 = self.conv2( self.conv1( x4 ) )
+        x3 = torch.cat([x4, x3], 1)
+        x3 = self.conv3( self.conv3_0(x3) )
+        x3 = self.conv4( x3 )
+        x2 = torch.cat([x2, x3], 1)
+        x2 = self.conv5( self.conv5_0(x2) )
+        x2 = self.conv6( x2 )
+        x1 = torch.cat([x1, x2], 1)
+        x1 = self.conv7( self.conv7_0(x1) )
+        x1 = self.conv8( x1 )
+        x0 = torch.cat([x0, x1], 1)
+        x0 = self.conv9( x0 )
+        x = self.conv10( self.conv10_0(x0) )
+        x = nn.Sigmoid()(x)
+        return x
+
+class Net( nn.Module ):
+    def __init__( self, large_reg=False ):
         super().__init__()
 
         self.cls = Cls()
-        self.reg = Reg()
+        if not large_reg:
+            self.reg = Reg()
+        else:
+            self.reg = LReg()
 
     def forward( self, x, stage = 1, binary=False, single=True, noise=False, gauss=False, R=None, UR=None, noise_rate=None ):
         x0, x1, x2, x3, x4, pred0 = self.cls(x)

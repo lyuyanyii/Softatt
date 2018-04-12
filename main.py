@@ -65,6 +65,7 @@ parser.add_argument( '--def-iter', type=int, default=0 )
 parser.add_argument( '--myval', type=str, default=None, help='using my own validation')
 parser.add_argument( '--advattack', dest='advattack', action='store_true', help='adversarial attack testing' )
 parser.add_argument( '--noise-rate', type=float, default=1, help='noise rate in mask' )
+parser.add_argument( '--large-reg', dest='large_reg', action='store_true', help='using large regnet' )
 
 class Env():
     def __init__(self, args):
@@ -85,7 +86,7 @@ class Env():
         for key, value in sorted( vars(args).items() ):
             logger.info( str(key) + ': ' + str(value) )
 
-        model = getattr(models, args.arch)()
+        model = getattr(models, args.arch)(large_reg=args.large_reg)
 
         model = torch.nn.DataParallel( model ).cuda()
 
