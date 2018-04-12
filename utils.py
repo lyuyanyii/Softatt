@@ -8,12 +8,13 @@ import shutil
 from torch.autograd import Function
 
 class Binarized( Function ):
-    def forward( self, x ):
-        output = torch.round( x )
+    def forward( self, x, R ):
+        #output = torch.round( x )
+        output = (x > R).type( torch.cuda.FloatTensor )
         return output
 
     def backward( self, output_grad ):
-        return output_grad
+        return output_grad, output_grad
 
 class Entropy( nn.Module ):
     def __init__( self ):

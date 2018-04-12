@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 import torch.nn.functional as F
-from utils import weight_init
+from utils import weight_init, Binarized
 from torchvision import models
 import torch.utils.model_zoo as model_zoo
 
@@ -103,7 +103,7 @@ class Net( nn.Module ):
         self.cls = Cls()
         self.reg = Reg()
 
-    def forward( self, x, stage = 1, binary=False, single=True, noise=False ):
+    def forward( self, x, stage = 1, binary=False, single=True, noise=False, gauss=False, R=None, UR=None, noise_rate=None ):
         x0, x1, x2, x3, x4, pred0 = self.cls(x)
 
         if stage == 0:
@@ -111,7 +111,7 @@ class Net( nn.Module ):
 
         mask = self.reg( x0, x1, x2, x3, x4)
 
-        if noise:
+        if noise and not gauss:
             y = x
             perm0 = torch.randperm( y.size(0) ).cuda()
             perm2 = torch.randperm( y.size(2) ).cuda()
@@ -121,8 +121,16 @@ class Net( nn.Module ):
             y = y[:, :, perm2, :]
             y = y[:, :, :, perm3]
             y = y.view( x.size() )
+        if gauss:
+            y = R
+            y *= torch.abs(x)
 
-        x = x * mask.expand( x.size() )
+        if binary:
+            bi = Binarized()
+            mask = bi( mask, UR )
+            
+        if not gauss:
+            x = x * mask.expand( x.size() )
 
         if noise:
             x = x + y * (1 - mask.expand( x.size() ) )

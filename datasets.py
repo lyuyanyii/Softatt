@@ -40,3 +40,30 @@ class mnist_dataset(data.Dataset):
         """
         return data, label
         
+class random_gauss(data.Dataset):
+    def __init__( self, l, gauss ):
+        self.len = l
+        self.gauss = gauss
+
+    def __len__(self):
+        return self.len
+
+    def __getitem__(self, index):
+        if self.gauss:
+            return torch.randn( 3, 224, 224 )
+        else:
+            return torch.zeros(1)
+
+class random_uniform(data.Dataset):
+    def __init__( self, l, binary ):
+        self.len = l
+        self.bi = binary
+
+    def __len__(self):
+        return self.len
+
+    def __getitem__( self, index ):
+        if self.bi:
+            return torch.rand( 1, 224, 224 )
+        else:
+            return torch.zeros(1)

@@ -23,6 +23,7 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import tqdm
 #import matplotlib.pyplot as plt
+from imagenet1000_clsid_to_human import labels
 
 model_names = ['A', 'B', 'C']
 
@@ -54,16 +55,29 @@ parser.add_argument( '--trained-cls', dest='trained_cls', action='store_true' )
 parser.add_argument( '--binary', dest='binary', action='store_true' )
 parser.add_argument( '--grad-check',dest='grad_check',action='store_true' )
 parser.add_argument( '--single-batch-exp',dest='single_batch_exp',action='store_true')
-parser.add_argument( '--save-img', dest='save_img', action='store_true' )
+parser.add_argument( '--save-img', type=str,default=None, help='path to save images' )
 parser.add_argument( '--double', dest='double', action='store_true', help='using mask & 1-mask to compute 2 losses' )
 parser.add_argument( '--threshold',type=int,default=1,help='threshold in evaluation' )
 parser.add_argument( '--noise',dest='noise',action='store_true', help='adding noise when training mask' )
 parser.add_argument( '--KL', dest='KL', action='store_true', help='using KL-divergence loss' )
+parser.add_argument( '--gauss', dest='gauss', action='store_true', help='using Gaussian noise proportional to the mask' )
+parser.add_argument( '--def-iter', type=int, default=0 )
+parser.add_argument( '--myval', type=str, default=None, help='using my own validation')
+parser.add_argument( '--advattack', dest='advattack', action='store_true', help='adversarial attack testing' )
+parser.add_argument( '--noise-rate', type=float, default=1, help='noise rate in mask' )
 
 class Env():
     def __init__(self, args):
         self.best_acc = 0
         self.args = args
+
+        if args.evaluation or args.advattack:
+            torch.manual_seed(0)
+        if args.save_img:
+            if not os.path.exists( args.save_img ):
+                os.system( "mkdir {}".format(args.save_img) )
+        if args.gauss:
+            args.noise = True
 
         logger = utils.setup_logger( os.path.join( args.save_folder, 'log.log' ) )
         self.logger = logger
@@ -134,6 +148,8 @@ class Env():
             args.data = '/scratch/datasets/imagenet/'
             traindir = os.path.join(args.data, 'train')
             valdir = os.path.join(args.data, 'val')
+            if args.myval:
+                valdir = args.myval
             normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                             std=[0.229, 0.224, 0.225])
             train_dataset = torchvision.datasets.ImageFolder(
@@ -160,16 +176,23 @@ class Env():
             batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True )
         self.valid_loader = data.DataLoader( valid_dataset,
             batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True )
+        #if args.gauss:
+        self.noise_loader = data.DataLoader( datasets.random_gauss(len(train_dataset), args.gauss), batch_size=args.batch_size, num_workers=args.workers, pin_memory=True )
+        self.uniform_loader = data.DataLoader( datasets.random_uniform(len(train_dataset), args.binary), batch_size=args.batch_size, num_workers=args.workers, pin_memory=True )
 
         self.args = args
         self.save( self.best_acc )
 
+        if args.def_iter == 0:
+            args.def_iter = args.tot_iter
         tot_epoch1 = (args.tot_iter - self.it) * args.batch_size // len(train_dataset) + 1
         tot_epoch2 = (args.tot_iter - self.reg_it) * args.batch_size // len(train_dataset) + 1
         if args.trained_cls:
             tot_epoch1 = 0
         if args.evaluation:
             self.valid()
+        elif args.advattack:
+            self.adv_attack()
         elif args.grad_check:
             self.grad_check()
         elif args.single_batch_exp:
@@ -253,7 +276,7 @@ class Env():
         self.model.module.cls.eval()
         for param in self.model.module.cls.parameters():
             param.requires_grad = False
-        for i, batch in enumerate(self.train_loader):
+        for i, (batch, noise, UR) in enumerate(zip(self.train_loader, self.noise_loader, self.uniform_loader)):
             self.reg_it += 1
             if self.reg_it % (self.args.tot_iter // 3) == 0:
                 for group in self.optimizer_reg.param_groups:
@@ -263,18 +286,26 @@ class Env():
 
             inp = Variable(batch[0]).cuda()
             gt = Variable(batch[1]).cuda()
+            if self.args.gauss:
+                noise = Variable(noise).cuda()
+            else:
+                noise = None
+            if self.args.binary:
+                UR = Variable(UR).cuda()
+            else:
+                UR = None
 
             if not self.args.double:
-                pred0, pred1, mask = self.model( inp, 1, self.args.binary, noise=self.args.noise )
+                pred0, pred1, mask = self.model( inp, 1, self.args.binary, noise=self.args.noise, gauss=self.args.gauss, R=noise, UR=UR, noise_rate=self.args.noise_rate )
                 pred2 = None
             else:
-                pred0, pred1, pred2, mask = self.model( inp, 1, self.args.binary, single=False, noise=self.args.noise )
+                pred0, pred1, pred2, mask = self.model( inp, 1, self.args.binary, single=False, noise=self.args.noise, gauss=self.args.gauss, R=noise, UR=UR, noise_rate=self.args.noise_rate )
 
             loss1 = self.criterion( pred0, gt )
             if not self.args.KL:
                 loss2 = self.criterion( pred1, gt )
             else:
-                loss2 = (pred0 * (torch.log(torch.nn.Softmax()(pred0)) - torch.log(torch.nn.Softmax()(pred1)))).sum(1).mean(0)
+                loss2 = (torch.nn.Softmax()(pred0) * (torch.log(torch.nn.Softmax()(pred0)) - torch.log(torch.nn.Softmax()(pred1)))).sum(1).mean(0) * 0.5 + self.criterion( pred1, gt ) * 0.5
             loss = loss1 + loss2
             if pred2 is not None:
                 #loss -= self.criterion( pred2, gt ) * 0.01
@@ -286,6 +317,7 @@ class Env():
             loss.backward()
             self.optimizer_reg.step()
             if self.reg_it % self.args.print_freq == 0:
+                self.logger.info( "mean={m:.5f}, std={s:.5f}".format(m=mask.mean().data[0], s=mask.std().data[0]))
                 log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val:.5f} ({loss.avg:.5f}), Loss1:{loss1:.5f}, Loss2:{loss2:.5f}, Loss2-Loss1:{dif.val:.5f} ({dif.avg:.5f})'.format( iter=self.reg_it, loss=losses, loss1=loss1.data[0], loss2=loss2.data[0], dif=diff )
                 self.logger.info( log_str )
             if self.reg_it >= self.args.tot_iter:
@@ -497,20 +529,81 @@ class Env():
         if isinstance(img, Variable):
             img = img.type( torch.FloatTensor )
             img = img.data.numpy()
-        if self.args.dataset == 'mnist':
+        if len(img.shape) == 2:
+            img *= 255
+            img = img.astype(np.uint8)
+            img = cv2.applyColorMap( img, cv2.COLORMAP_JET )
+        elif self.args.dataset == 'mnist':
             img = (img[0] + 0.5) * 255
         elif self.args.dataset == 'cifar10':
             img = img.transpose( 1, 2, 0 )
             mean = np.array([x/255.0 for x in [125.3, 123.0, 113.9]])
             std  = np.array([x/255.0 for x in [63.0, 62.1, 66.7]])
             img = (img * std + mean) * 255
+            img = img[:, :, ::-1]
         elif self.args.dataset == 'imgnet':
             img = img.transpose( 1, 2, 0 )
             mean = np.array([0.485, 0.456, 0.406])
             std  = np.array([0.229, 0.224, 0.225])
             img = (img * std + mean) * 255
+            img = img[:, :, ::-1]
+            img = np.maximum( np.minimum( img, 255 ), 0)
         img = img.astype(np.uint8)
         return img
+
+    def adv_attack( self ):
+        self.model.eval()
+        for i, batch in tqdm.tqdm(enumerate(self.valid_loader)):
+            inp = Variable( batch[0], requires_grad=True ).cuda()
+            gt  = Variable( batch[1] ).cuda()
+
+            pred0, pred1, mask = self.model( inp )
+            mask_ori = mask
+            loss = self.criterion( pred0, gt )
+            score0, pred0 = torch.max( pred0, 1 )
+            score1, pred1 = torch.max( pred1, 1 )
+
+            if int(pred0[0]) != int(gt[0]):
+                continue
+
+            #loss.backward()
+            grad = torch.autograd.grad( outputs=loss, inputs=inp, grad_outputs=torch.ones(1).cuda(), create_graph = True, retain_graph = True, only_inputs = True )[0]
+            adv_noise = torch.sign( grad )
+            print(adv_noise)
+            max_c = 0.1
+            num_its = 20
+            flag0, flag1 = False, False
+            for j in range(num_its):
+                adv_inp = inp + adv_noise * max_c * (j / num_its)
+                pred0, pred1, mask = self.model( adv_inp )
+                score0, pred0 = torch.max( pred0, 1 )
+                score1, pred1 = torch.max( pred1, 1 )
+
+                if not flag0 and int(pred0[0]) != int(gt[0]):
+                    flag0 = True
+                    print('Ori attack succeeds with lambda = {:.3f}.'.format(max_c * (j / num_its)))
+                    print( labels[int(pred0[0])], "***", labels[int(gt[0])] )
+                    img = self.toRGB( adv_inp[0] )
+                    mask_b = self.toRGB( mask[0, 0] )
+                    mask_c = self.toRGB( mask_ori[0, 0] )
+                    cv2.imshow('x', img)
+                    cv2.imshow('y', mask_b)
+                    cv2.imshow('z', mask_c)
+                    cv2.waitKey(0)
+                if flag0 and not flag1 and int(pred1[0]) != int(gt[0]):
+                    flag1 = True
+                    print('Mask attack succeeds with lambda = {:.3f}.'.format(max_c * (j / num_its)))
+                    print( labels[int(pred0[0])], "***", labels[int(gt[0])] )
+                    img = self.toRGB( adv_inp[0] )
+                    mask_b = self.toRGB( mask[0, 0] )
+                    mask_c = self.toRGB( mask_ori[0, 0] )
+                    cv2.imshow('x', img)
+                    cv2.imshow('y', mask_b)
+                    cv2.imshow('z', mask_c)
+                    cv2.waitKey(0)
+            if not flag0 or not flag1:
+                print('Adv attack fails')
+
 
     def valid( self ):
         logger = self.logger
@@ -525,10 +618,7 @@ class Env():
             gt  = Variable( batch[1], volatile=True ).cuda()
 
             #print("AAAAA")
-            if not self.args.binary:
-                pred0, pred1, mask = self.model( inp )
-            else:
-                pred0, pred1, mask = self.model( inp, stage=1, binary=self.args.binary )
+            pred0, pred1, mask = self.model( inp )
             score0, pred0 = torch.max( pred0, 1 )
             score1, pred1 = torch.max( pred1, 1 )
             acc0 = (pred0 == gt).type( torch.FloatTensor ).mean()
@@ -580,10 +670,10 @@ class Env():
                             cv2.imshow('z', img1)
                             cv2.waitKey(0)
                         else:
-                            name = '{}_gt{}_pred{}'.format(cnt, int(gt[0]), pred0[0])
-                            cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_inp.png'.format(cnt, int(gt[0]), pred0[0]), img )
-                            cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_mask.png'.format(cnt, int(gt[0]), pred0[0]), mask_b )
-                            cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_masked_inp.png'.format(cnt, int(gt[0]), pred0[0]), img1 )
+                            name = '{}/{}_GT({})_PRED({})'.format(self.args.save_img, cnt, labels[int(gt[0])], labels[pred0[0]])
+                            cv2.imwrite( '{}_inp.png'.format(name), img )
+                            cv2.imwrite( '{}_mask.png'.format(name), mask_b )
+                            cv2.imwrite( '{}_masked_inp.png'.format(name), img1 )
                 acc_list = np.array(acc_list).astype( np.float64 )
                 loss_list = np.array(loss_list)
                 acc_list *= loss_list.max()
@@ -607,7 +697,7 @@ class Env():
                 inp = inp.data.numpy()
                 for pic, img, j in zip(mask, inp, range(mask.shape[0])):
                     if cnt == 300:
-                        break
+                        return
                     #if gt[j] == pred0[j]:
                     #    continue
                     print("pred0:{}, pred1:{}, gt:{}".format( pred0[j], pred1[j], gt[j] ))
@@ -629,9 +719,10 @@ class Env():
                         cv2.imshow( 'z', img1 )
                         cv2.waitKey(0)
                     else:
-                        cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_inp.png'.format(cnt, gt[j], pred0[j]), img )
-                        cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_mask.png'.format(cnt, gt[j], pred0[j]), pic )
-                        cv2.imwrite( 'images_imgnet/{}_gt{}_pred{}_masked_inp.png'.format(cnt, gt[j], pred0[j]), img1 )
+                        name = '{}/{}_GT({})_PRED({})'.format(self.args.save_img, cnt, labels[int(gt[j])], labels[int(pred1[j])])
+                        cv2.imwrite( '{}_inp.png'.format(name), img )
+                        cv2.imwrite( '{}_mask.png'.format(name), pic )
+                        cv2.imwrite( '{}_masked_inp.png'.format(name), img1 )
                     cnt += 1
                     
         log_str = "VAL FINAL -> Accuracy0: {}, Accuracy1: {}".format( accs0.avg, accs1.avg )
