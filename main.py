@@ -66,6 +66,7 @@ parser.add_argument( '--myval', type=str, default=None, help='using my own valid
 parser.add_argument( '--advattack', dest='advattack', action='store_true', help='adversarial attack testing' )
 parser.add_argument( '--noise-rate', type=float, default=1, help='noise rate in mask' )
 parser.add_argument( '--large-reg', dest='large_reg', action='store_true', help='using large regnet' )
+parser.add_argument( '--fb', dest='fb', action='store_true', help='fb server' )
 
 class Env():
     def __init__(self, args):
@@ -146,7 +147,10 @@ class Env():
             valid_dataset = torchvision.datasets.CIFAR10(root='./data', train=False,
                                                     download=True, transform=valid_transform)
         elif args.dataset == 'imgnet':
-            args.data = '/scratch/datasets/imagenet/'
+            if args.fb:
+                args.data = '/scratch/data/imagenet/'        
+            else:
+                args.data = '/scratch/datasets/imagenet/'
             traindir = os.path.join(args.data, 'train')
             valdir = os.path.join(args.data, 'val')
             if args.myval:
