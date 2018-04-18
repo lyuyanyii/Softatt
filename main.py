@@ -25,7 +25,7 @@ import tqdm
 #import matplotlib.pyplot as plt
 from imagenet1000_clsid_to_human import labels
 
-model_names = ['A', 'B', 'C']
+model_names = ['A', 'B', 'C', 'CDNet', 'PRNet']
 
 parser = argparse.ArgumentParser( description='Low Supervised Semantic Segmentation' )
 
@@ -35,7 +35,7 @@ parser.add_argument( '--lr', type=float, help='initial learning rate' )
 #parser.add_argument( '--lr-step', type=float, help='lr will be decayed at these steps' )
 #parser.add_argument( '--lr-decay', type=float, help='lr decayed rate' )
 parser.add_argument( '--data', type=str, help='the directory of data' )
-parser.add_argument( '--dataset', type=str, choices=['mnist', 'cifar10', 'imgnet'] )
+parser.add_argument( '--dataset', type=str, choices=['mnist', 'cifar10', 'imgnet', 'chestx', 'place365'] )
 parser.add_argument( '--tot-iter', type=int, help='total number of iterations' )
 #parser.add_argument( '--val-iter', type=int, help='do validation every val-iter steps' )
 parser.add_argument( '--workers', type=int, default=4, help='number of data loading workers (default:4)' )
@@ -102,9 +102,16 @@ class Env():
         logger.info( 'Dims: {}'.format( sum([m.data.nelement() if m.requires_grad else 0
             for m in model.parameters()] ) ) )
 
-        self.optimizer_cls = optim.SGD( model.module.cls.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay )
-        self.optimizer_reg = optim.SGD( model.module.reg.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay )
-        self.criterion = nn.CrossEntropyLoss().cuda()
+        if args.dataset != 'chestx':
+            self.optimizer_cls = optim.SGD( model.module.cls.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay )
+            self.optimizer_reg = optim.SGD( model.module.reg.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay )
+        else:
+            self.optimizer_cls = optim.Adam( model.module.cls.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=(0.9, 0.999), eps=1e-08 )
+            self.optimizer_reg = optim.Adam( model.module.reg.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=(0.9, 0.999), eps=1e-08 )
+        if args.dataset != 'chestx':
+            self.criterion = nn.CrossEntropyLoss().cuda()
+        else:
+            self.criterion = utils.WeightedBCELoss()
         self.entropy = utils.Entropy().cuda()
 
         self.it = 0
@@ -147,6 +154,7 @@ class Env():
             valid_dataset = torchvision.datasets.CIFAR10(root='./data', train=False,
                                                     download=True, transform=valid_transform)
         elif args.dataset == 'imgnet':
+            self.labels = labels
             if args.fb:
                 args.data = '/scratch/data/imagenet/'        
             else:
@@ -174,13 +182,71 @@ class Env():
                     transforms.ToTensor(),
                     normalize,
                 ]))
+        elif args.dataset == 'chestx':
+            args.data = '/scratch/datasets/chestx-ray14'
+            data_dir = os.path.join( args.data, 'images' )
+            train_list_file = os.path.join( args.data, 'train_list.txt' )
+            test_list_file = os.path.join( args.data, 'test_list.txt' )
+            self.labels = [ 'Atelectasis', 'Cardiomegaly', 'Effusion', 'Infiltration', 'Mass', 'Nodule', 'Pneumonia', 'Pneumothorax', 'Consolidation', 'Edema', 'Emphysema', 'Fibrosis', 'Pleural_Thickening', 'Hernia']
+            normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225])
+            train_dataset = datasets.chestx_dataset(
+                data_dir=data_dir,
+                image_list_file=train_list_file,
+                transform=transforms.Compose([
+                    transforms.RandomResizedCrop(224),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
+            valid_dataset = datasets.chestx_dataset(
+                data_dir=data_dir,
+                image_list_file=test_list_file,
+                transform=transforms.Compose([
+                    transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
+        elif args.dataset == 'place356':
+            self.labels = labels
+            args.data = '/scratch/data/place365/'        
+            traindir = os.path.join(args.data, 'data_large')
+            valdir = os.path.join(args.data, 'test_large')
+            if args.myval:
+                valdir = args.myval
+            normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225])
+            train_dataset = torchvision.datasets.ImageFolder(
+                traindir,
+                transforms.Compose([
+                    transforms.RandomResizedCrop(224),
+                    transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
+            valid_dataset = torchvision.datasets.ImageFolder(
+                valdir,
+                transforms.Compose([
+                    transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
         else:
             raise NotImplementedError('Dataset has not been implemented')
 
         self.train_loader = data.DataLoader( train_dataset,
             batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True )
+        #torch.save(torch.random.get_rng_state(), 'rng_state.data')
+        if self.args.evaluation:
+            torch.random.set_rng_state( torch.load('rng_state.data') )
         self.valid_loader = data.DataLoader( valid_dataset,
-            batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True )
+            batch_size=args.batch_size, shuffle=True, num_workers=args.workers, 
+            pin_memory=True, 
+            #worker_init_fn=utils.worker_init,
+            )
         #if args.gauss:
         self.noise_loader = data.DataLoader( datasets.random_gauss(len(train_dataset), args.gauss), batch_size=args.batch_size, num_workers=args.workers, pin_memory=True )
         self.uniform_loader = data.DataLoader( datasets.random_uniform(len(train_dataset), args.binary), batch_size=args.batch_size, num_workers=args.workers, pin_memory=True )
@@ -553,6 +619,13 @@ class Env():
             img = (img * std + mean) * 255
             img = img[:, :, ::-1]
             img = np.maximum( np.minimum( img, 255 ), 0)
+        elif self.args.dataset == 'chestx':
+            img = img.transpose( 1, 2, 0 )
+            mean = np.array([0.485, 0.456, 0.406])
+            std  = np.array([0.229, 0.224, 0.225])
+            img = (img * std + mean) * 255
+            img = img[:, :, ::-1]
+            img = np.maximum( np.minimum( img, 255 ), 0)
         img = img.astype(np.uint8)
         return img
 
@@ -587,7 +660,7 @@ class Env():
                 if not flag0 and int(pred0[0]) != int(gt[0]):
                     flag0 = True
                     print('Ori attack succeeds with lambda = {:.3f}.'.format(max_c * (j / num_its)))
-                    print( labels[int(pred0[0])], "***", labels[int(gt[0])] )
+                    print( self.labels[int(pred0[0])], "***", self.labels[int(gt[0])] )
                     img = self.toRGB( adv_inp[0] )
                     mask_b = self.toRGB( mask[0, 0] )
                     mask_c = self.toRGB( mask_ori[0, 0] )
@@ -598,7 +671,7 @@ class Env():
                 if flag0 and not flag1 and int(pred1[0]) != int(gt[0]):
                     flag1 = True
                     print('Mask attack succeeds with lambda = {:.3f}.'.format(max_c * (j / num_its)))
-                    print( labels[int(pred0[0])], "***", labels[int(gt[0])] )
+                    print( self.labels[int(pred0[0])], "***", self.labels[int(gt[0])] )
                     img = self.toRGB( adv_inp[0] )
                     mask_b = self.toRGB( mask[0, 0] )
                     mask_c = self.toRGB( mask_ori[0, 0] )
@@ -609,6 +682,14 @@ class Env():
             if not flag0 or not flag1:
                 print('Adv attack fails')
 
+    def compute_AUCs(self, gt, pred):
+        from sklearn.metrics import roc_auc_score
+        AUROCs = []
+        gt_np = gt.cpu().data.numpy()
+        pred_np = pred.cpu().data.numpy()
+        for i in range(14):
+            AUROCs.append(roc_auc_score(gt_np[:, i], pred_np[:, i]))
+        return AUROCs
 
     def valid( self ):
         logger = self.logger
@@ -618,21 +699,33 @@ class Env():
         accs1 = AverageMeter()
 
         cnt = 0
+        pred0_l = []
+        pred1_l = []
+        gt_l = []
         for i, batch in tqdm.tqdm(enumerate(self.valid_loader)):
             inp = Variable( batch[0], volatile=True ).cuda()
             gt  = Variable( batch[1], volatile=True ).cuda()
 
             #print("AAAAA")
             pred0, pred1, mask = self.model( inp )
-            score0, pred0 = torch.max( pred0, 1 )
-            score1, pred1 = torch.max( pred1, 1 )
-            acc0 = (pred0 == gt).type( torch.FloatTensor ).mean()
-            acc1 = (pred1 == gt).type( torch.FloatTensor ).mean()
-            accs0.update( acc0.data[0], inp.size(0) )
-            accs1.update( acc1.data[0], inp.size(0) )
+            if self.args.dataset != 'chestx':
+                score0, pred0 = torch.max( pred0, 1 )
+                score1, pred1 = torch.max( pred1, 1 )
+                acc0 = (pred0 == gt).type( torch.FloatTensor ).mean()
+                acc1 = (pred1 == gt).type( torch.FloatTensor ).mean()
+                accs0.update( acc0.data[0], inp.size(0) )
+                accs1.update( acc1.data[0], inp.size(0) )
+            else:
+                pred0_l.append( pred0 )
+                pred1_l.append( pred1 )
+                gt_l.append(gt)
 
-            pred0 = pred0.type( torch.LongTensor ).data.numpy()
-            pred1 = pred1.type( torch.LongTensor ).data.numpy()
+            if self.args.dataset != 'chestx':
+                dtype = torch.LongTensor
+            else:
+                dtype = torch.FloatTensor
+            pred0 = pred0.type( dtype ).data.numpy()
+            pred1 = pred1.type( dtype ).data.numpy()
             #gt = gt.type( torch.LongTensor ).data.numpy()
             if self.args.threshold != 1 and cnt <= 300:
                 cnt += 1
@@ -675,7 +768,7 @@ class Env():
                             cv2.imshow('z', img1)
                             cv2.waitKey(0)
                         else:
-                            name = '{}/{}_GT({})_PRED({})'.format(self.args.save_img, cnt, labels[int(gt[0])], labels[pred0[0]])
+                            name = '{}/{}_GT({})_PRED({})'.format(self.args.save_img, cnt, self.labels[int(gt[0])], self.labels[pred0[0]])
                             cv2.imwrite( '{}_inp.png'.format(name), img )
                             cv2.imwrite( '{}_mask.png'.format(name), mask_b )
                             cv2.imwrite( '{}_masked_inp.png'.format(name), img1 )
@@ -705,10 +798,10 @@ class Env():
                         return
                     #if gt[j] == pred0[j]:
                     #    continue
-                    print("pred0:{}, pred1:{}, gt:{}".format( pred0[j], pred1[j], gt[j] ))
-                    img1 = img * pic[0]
+                    print("pred0:{}, pred1:{}, gt:{}".format( pred0[j], pred1[j], gt[j].type(torch.FloatTensor).data.numpy() ))
+                    #img1 = img * pic[0]
                     img = self.toRGB( img )
-                    img1 = self.toRGB( img1 )
+                    #img1 = self.toRGB( img1 )
                     pic = pic[0]
                     print(pic)
                     #pic /= pic.max()
@@ -716,6 +809,8 @@ class Env():
                     pic *= 255
                     pic = pic.astype( np.uint8 )
                     pic = cv2.applyColorMap( pic, cv2.COLORMAP_JET )
+                    img1 = pic.astype(np.float32) * 0.5 + img.astype(np.float32) * 0.3
+                    img1 = img1.astype(np.uint8)
 
                     img = img.astype( np.uint8 )
                     if not self.args.save_img:
@@ -724,13 +819,23 @@ class Env():
                         cv2.imshow( 'z', img1 )
                         cv2.waitKey(0)
                     else:
-                        name = '{}/{}_GT({})_PRED({})'.format(self.args.save_img, cnt, labels[int(gt[j])], labels[int(pred1[j])])
+                        name = '{}/{}_GT({})_PRED({})'.format(self.args.save_img, cnt, self.labels[int(gt[j])], self.labels[int(pred1[j])])
                         cv2.imwrite( '{}_inp.png'.format(name), img )
                         cv2.imwrite( '{}_mask.png'.format(name), pic )
                         cv2.imwrite( '{}_masked_inp.png'.format(name), img1 )
                     cnt += 1
                     
-        log_str = "VAL FINAL -> Accuracy0: {}, Accuracy1: {}".format( accs0.avg, accs1.avg )
+        if self.args.dataset != 'chestx':
+            log_str = "VAL FINAL -> Accuracy0: {}, Accuracy1: {}".format( accs0.avg, accs1.avg )
+        else:
+            pred0 = torch.cat( pred0_l, 0 )
+            pred1 = torch.cat( pred1_l, 0 )
+            gt = torch.cat( gt_l, 0 )
+            AUC0 = np.array(self.compute_AUCs( gt, pred0 ))
+            AUC1 = np.array(self.compute_AUCs( gt, pred1 ))
+            print(AUC0, AUC1)
+            log_str = "VAL FINAL -> AUC0: {}, AUC1: {}".format( AUC0.mean(), AUC1.mean() )
+            accs1.avg = AUC1.mean()
         logger.info( log_str )
         self.save( accs1.avg )
 

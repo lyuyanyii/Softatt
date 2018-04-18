@@ -7,6 +7,10 @@ import shutil
 
 from torch.autograd import Function
 
+def worker_init( worker_id ):
+    #print(torch.initial_seed())
+    torch.manual_seed(1217571572117475252)
+
 class Binarized( Function ):
     def forward( self, x, R ):
         #output = torch.round( x )
@@ -22,6 +26,18 @@ class Entropy( nn.Module ):
     def forward( self, x ):
         x = nn.Softmax()(x)
         loss = (-x * torch.log(x)).sum(1).mean(0)
+        return loss
+
+class WeightedBCELoss( nn.Module ):
+    def __init__(self):
+        super().__init__()
+    def forward( self, input, target ):
+        w0 = (target == 0).type( torch.cuda.FloatTensor )
+        w1 = (target == 1).type( torch.cuda.FloatTensor )
+        w0 /= 0.95
+        w1 /= 0.05
+        loss = -( target * torch.log(input + 1e-5) + (1 - target) * torch.log(1 - input + 1e-5) )
+        loss = (loss * (w0 + w1)).mean()
         return loss
 
 def cls_zero_grad( m ):
