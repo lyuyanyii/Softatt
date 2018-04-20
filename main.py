@@ -59,7 +59,7 @@ parser.add_argument( '--save-img', type=str,default=None, help='path to save ima
 parser.add_argument( '--double', dest='double', action='store_true', help='using mask & 1-mask to compute 2 losses' )
 parser.add_argument( '--threshold',type=int,default=1,help='threshold in evaluation' )
 parser.add_argument( '--noise',dest='noise',action='store_true', help='adding noise when training mask' )
-parser.add_argument( '--KL', type=float, default=0, action='store_true', help='using KL-divergence loss' )
+parser.add_argument( '--KL', type=float, default=0, help='using KL-divergence loss' )
 parser.add_argument( '--gauss', dest='gauss', action='store_true', help='using Gaussian noise proportional to the mask' )
 parser.add_argument( '--def-iter', type=int, default=0 )
 parser.add_argument( '--myval', type=str, default=None, help='using my own validation')
