@@ -112,3 +112,67 @@ class chestx_dataset(data.Dataset):
 
     def __len__(self):
         return len(self.image_names)
+
+class cub200_dataset(data.Dataset):
+    def __init__(self, data_dir, mode, transform=None):
+        image_dirs = []
+        labels = []
+        ids = []
+        image_list_file = os.path.join( data_dir, 'images.txt' )
+        with open(image_list_file, 'r') as f:
+            for line in f:
+                image_dirs.append( os.path.join(data_dir, 'images', line.split()[1]) )
+        label_list_file = os.path.join( data_dir, 'image_class_labels.txt' )
+        with open(label_list_file, 'r') as f:
+            for line in f:
+                labels.append( int(line.split()[1]) - 1 )
+        id_list_file = os.path.join( data_dir, 'train_test_split.txt' )
+        with open(id_list_file, 'r') as f:
+            for line in f:
+                ids.append( int(line.split()[1]) )
+        bbox_list_file = os.path.join( data_dir, 'bounding_boxes.txt' )
+        bboxes = []
+        with open(bbox_list_file, 'r') as f:
+            for line in f:
+                idx, x, y, w, h = line.split()
+                bboxes.append( (float(x), float(y), float(w), float(h)) )
+        flag = not (mode == 'train')
+
+        L = len(image_dirs)
+        image_dirs = [ image_dirs[i] for i in range(L) if ids[i] == flag ]
+        labels = [ labels[i] for i in range(L) if ids[i] == flag ]
+        bboxes = [ bboxes[i] for i in range(L) if ids[i] == flag ]
+        
+        self.image_dirs, self.labels, self.bboxes = image_dirs, labels, bboxes
+        self.transform = transform
+        self.mode = mode
+        self.len = len(image_dirs)
+
+    def __len__( self ):
+        return self.len
+
+    def __getitem__( self, index ):
+        image_dir = self.image_dirs[index]
+        img = Image.open( image_dir ).convert('RGB')
+        label = self.labels[index]
+        bbox = self.bboxes[index]
+        if self.mode != 'train':
+            x, y, w, h = bbox
+            img_w, img_h = img.size
+            if img_w < img_h:
+                r = 256 / img_w
+            else:
+                r = 256 / img_h
+            x, y, w, h = x*r, y*r, w*r, h*r
+            img_w, img_h = img_w*r, img_h*r
+            x -= img_w/2 - 224/2
+            y -= img_h/2 - 224/2
+            bbox = x, y, w, h
+        if self.transform is not None:
+            img = self.transform(img)
+
+        if self.mode == 'train':
+            return img, torch.from_numpy(np.array([label]))
+        else:
+            return img, torch.from_numpy(np.array([label])), torch.from_numpy(np.array(bbox))
+

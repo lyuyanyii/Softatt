@@ -10,8 +10,8 @@ def A( **kwargs ):
 def B( **kwargs ):
     return BNet.Net()
 
-def C( large_reg, **kwargs ):
-    return CNet.Net(large_reg=large_reg)
+def C( large_reg, quarter_reg, new_fc, **kwargs ):
+    return CNet.Net(large_reg=large_reg, quarter_reg=quarter_reg, new_fc=new_fc)
 
 def CDNet( **kwargs ):
     return CDNet121.Net()

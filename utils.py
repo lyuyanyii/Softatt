@@ -4,12 +4,61 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import shutil
+import cv2
+import numpy as np
 
-from torch.autograd import Function
+from torch.autograd import Function, Variable
+
+def bbox_generator( img, threshold ):
+    if isinstance( img, Variable ):
+        img = img.type( torch.FloatTensor )
+        img = img.data.numpy()
+    img = (img >= threshold).astype( np.uint8 ) * 255
+    im2, contours, hierarchy = cv2.findContours( img, cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE )
+    size = 0
+    x, y, w, h = 0, 0, 0, 0
+    for contour in contours:
+        x_, y_, w_, h_ = cv2.boundingRect( contour )
+        if w_ * h_ > size:
+            x, y, w, h = x_, y_, w_, h_
+            size = w * h
+    return x, y, w, h
+
+def IOU(boxA, boxB):
+    # determine the (x, y)-coordinates of the intersection rectangle
+    xA = max(boxA[0], boxB[0])
+    yA = max(boxA[1], boxB[1])
+    xB = min(boxA[2], boxB[2])
+    yB = min(boxA[3], boxB[3])
+    
+    # compute the area of intersection rectangle
+    interArea = (xB - xA + 1) * (yB - yA + 1)
+    
+    # compute the area of both the prediction and ground-truth
+    # rectangles
+    boxAArea = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
+    boxBArea = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
+    
+    # compute the intersection over union by taking the intersection
+    # area and dividing it by the sum of prediction + ground-truth
+    # areas - the interesection area
+    iou = interArea / float(boxAArea + boxBArea - interArea)
+    
+    # return the intersection over union value
+    return iou
 
 def worker_init( worker_id ):
     #print(torch.initial_seed())
     torch.manual_seed(1217571572117475252)
+
+class Quantile( Function ):
+    def forward( self, x ):
+        x *= 10
+        x = torch.floor( x )
+        x /= 10
+        return x
+    def backward( self, grad ):
+        return grad
 
 class Binarized( Function ):
     def forward( self, x, R ):
@@ -19,6 +68,26 @@ class Binarized( Function ):
 
     def backward( self, output_grad ):
         return output_grad, output_grad
+
+class sharp_t( Function ):
+    def forward( self, x ):
+        x *= (x > 0.1).type( torch.cuda.FloatTensor )
+        return x
+    def backward( self, grad ):
+        return grad
+
+class ThresholdBinarized( Function ):
+    def forward( self, x ):
+        r = torch.rand( x.size(0), 1, 1, 1 )
+        r = r.cuda().expand( x.size() )
+        x = torch.max( x, torch.ones(1).cuda() * 0.1 )
+        mask_P = (x > r).type( torch.cuda.FloatTensor )
+        self.save_for_backward( mask_P )
+        return mask_P
+    
+    def backward( self, grad ):
+        #mask_P, = self.saved_variables
+        return grad# * mask_P.data
 
 class Entropy( nn.Module ):
     def __init__( self ):

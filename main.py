@@ -35,7 +35,7 @@ parser.add_argument( '--lr', type=float, help='initial learning rate' )
 #parser.add_argument( '--lr-step', type=float, help='lr will be decayed at these steps' )
 #parser.add_argument( '--lr-decay', type=float, help='lr decayed rate' )
 parser.add_argument( '--data', type=str, help='the directory of data' )
-parser.add_argument( '--dataset', type=str, choices=['mnist', 'cifar10', 'imgnet', 'chestx', 'place365'] )
+parser.add_argument( '--dataset', type=str, choices=['mnist', 'cifar10', 'imgnet', 'chestx', 'place365', 'cub200'] )
 parser.add_argument( '--tot-iter', type=int, help='total number of iterations' )
 #parser.add_argument( '--val-iter', type=int, help='do validation every val-iter steps' )
 parser.add_argument( '--workers', type=int, default=4, help='number of data loading workers (default:4)' )
@@ -59,7 +59,7 @@ parser.add_argument( '--save-img', type=str,default=None, help='path to save ima
 parser.add_argument( '--double', dest='double', action='store_true', help='using mask & 1-mask to compute 2 losses' )
 parser.add_argument( '--threshold',type=int,default=1,help='threshold in evaluation' )
 parser.add_argument( '--noise',dest='noise',action='store_true', help='adding noise when training mask' )
-parser.add_argument( '--KL', dest='KL', action='store_true', help='using KL-divergence loss' )
+parser.add_argument( '--KL', type=float, default=0, action='store_true', help='using KL-divergence loss' )
 parser.add_argument( '--gauss', dest='gauss', action='store_true', help='using Gaussian noise proportional to the mask' )
 parser.add_argument( '--def-iter', type=int, default=0 )
 parser.add_argument( '--myval', type=str, default=None, help='using my own validation')
@@ -67,6 +67,16 @@ parser.add_argument( '--advattack', dest='advattack', action='store_true', help=
 parser.add_argument( '--noise-rate', type=float, default=1, help='noise rate in mask' )
 parser.add_argument( '--large-reg', dest='large_reg', action='store_true', help='using large regnet' )
 parser.add_argument( '--fb', dest='fb', action='store_true', help='fb server' )
+parser.add_argument( '--hard-threshold-training', dest='hard_threshold_training', action='store_true', help='using hard threshold in training' )
+parser.add_argument( '--sharp-reg', dest='sharp_reg', action='store_true', help='using sharp regulization' )
+parser.add_argument( '--sharp-noise', dest='sharp_noise', action='store_true', help='using noise to induce sharpness' )
+parser.add_argument( '--const-lr', dest='const_lr', action='store_true', help = 'disable learning rate schedule' )
+parser.add_argument( '--quarter', dest='quarter', action='store_true', help='outputing mask with quarter width and quarter height' )
+parser.add_argument( '--bbox', dest='bbox', action='store_true', help='enabling bbox' )
+parser.add_argument( '--new-fc', dest='new_fc', action='store_true', help='new fc' )
+parser.add_argument( '--quad', type=float, default=0, help='using quadratic regulization' )
+parser.add_argument( '--quantiled', dest='quantiled', action='store_true', help='using quantiled mask' )
+parser.add_argument( '--tot-var', type=float, default=0, help='adding total variation loss' )
 
 class Env():
     def __init__(self, args):
@@ -80,6 +90,8 @@ class Env():
                 os.system( "mkdir {}".format(args.save_img) )
         if args.gauss:
             args.noise = True
+        if args.hard_threshold_training:
+            args.binary = True
 
         logger = utils.setup_logger( os.path.join( args.save_folder, 'log.log' ) )
         self.logger = logger
@@ -87,7 +99,8 @@ class Env():
         for key, value in sorted( vars(args).items() ):
             logger.info( str(key) + ': ' + str(value) )
 
-        model = getattr(models, args.arch)(large_reg=args.large_reg)
+        model = getattr(models, args.arch)(large_reg=args.large_reg, quarter_reg=args.quarter,
+                                            new_fc=(args.dataset=='cub200'),)
 
         model = torch.nn.DataParallel( model ).cuda()
 
@@ -97,6 +110,8 @@ class Env():
             model.load_state_dict( checkpoint['model'] )
         else:
             logger.info( '=> initailizing the model, {}, with random weights.'.format(args.arch) )
+        if self.args.new_fc:
+            model.module.cls.fc = nn.Linear( 512, 200 ).cuda()
         self.model = model
 
         logger.info( 'Dims: {}'.format( sum([m.data.nelement() if m.requires_grad else 0
@@ -234,6 +249,30 @@ class Env():
                     transforms.ToTensor(),
                     normalize,
                 ]))
+        elif args.dataset == 'cub200':
+            self.labels = labels
+            args.data = '/scratch/datasets/CUB200/CUB_200_2011'
+            normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                            std=[0.229, 0.224, 0.225])
+            train_dataset = datasets.cub200_dataset(
+                data_dir=args.data,
+                mode='train',
+                transform=transforms.Compose([
+                    transforms.RandomResizedCrop(224),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
+            valid_dataset = datasets.cub200_dataset(
+                data_dir=args.data,
+                mode='valid',
+                transform=transforms.Compose([
+                    transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
+
         else:
             raise NotImplementedError('Dataset has not been implemented')
 
@@ -256,7 +295,7 @@ class Env():
 
         if args.def_iter == 0:
             args.def_iter = args.tot_iter
-        tot_epoch1 = (args.tot_iter - self.it) * args.batch_size // len(train_dataset) + 1
+        tot_epoch1 = (args.def_iter - self.it) * args.batch_size // len(train_dataset) + 1
         tot_epoch2 = (args.tot_iter - self.reg_it) * args.batch_size // len(train_dataset) + 1
         if args.trained_cls:
             tot_epoch1 = 0
@@ -273,20 +312,21 @@ class Env():
                 if args.advtrain:
                     self.advtrain()
                 else:
-                    self.train_cls()
-                    self.train_reg()
+                    self.train_joint()
                 self.valid()
                 if self.it >= args.tot_iter:
                     exit()
         else:
             for i in range(tot_epoch1):
                 self.train_cls()
-                self.valid()
-                if self.it >= args.tot_iter:
+                if args.dataset != 'cub200' or i % 5 == 4:
+                    self.valid()
+                if self.it >= args.def_iter:
                     break
             for i in range(tot_epoch2):
                 self.train_reg()
-                self.valid()
+                if args.dataset != 'cub200' or i % 5 == 4:
+                    self.valid()
                 if self.reg_it >= args.tot_iter:
                     break
 
@@ -312,11 +352,13 @@ class Env():
         logger.info("Classification Training Epoch")
         for param in self.model.module.cls.parameters():
             param.requires_grad = True
+        for param in self.model.module.reg.parameters():
+            param.requires_grad = False
         
         for i, batch in enumerate(self.train_loader):
             self.it += 1
 
-            if self.it % (self.args.tot_iter // 3) == 0:
+            if self.it % (self.args.def_iter // 3) == 0 and not self.args.const_lr:
                 for group in self.optimizer_cls.param_groups:
                     group['lr'] *= 0.1
 
@@ -324,6 +366,8 @@ class Env():
 
             inp = Variable(batch[0]).cuda()
             gt = Variable(batch[1]).cuda()
+            if len(gt.size()) == 2:
+                gt = gt[:, 0]
 
             pred0, pred1, mask = self.model( inp, 0 )
 
@@ -335,7 +379,7 @@ class Env():
             if self.it % self.args.print_freq == 0:
                 log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val:.5f} ({loss.avg:.5f})'.format( iter=self.it, loss=losses )
                 self.logger.info( log_str )
-            if self.it >= self.args.tot_iter:
+            if self.it >= self.args.def_iter:
                 return
 
     def train_reg( self ):
@@ -349,11 +393,77 @@ class Env():
             param.requires_grad = False
         for i, (batch, noise, UR) in enumerate(zip(self.train_loader, self.noise_loader, self.uniform_loader)):
             self.reg_it += 1
-            if self.reg_it % (self.args.tot_iter // 3) == 0:
+            if self.reg_it % (self.args.tot_iter // 3) == 0 and not self.args.const_lr:
                 for group in self.optimizer_reg.param_groups:
                     group['lr'] *= 0.1
 
             self.optimizer_reg.zero_grad()
+
+            inp = Variable(batch[0]).cuda()
+            gt = Variable(batch[1]).cuda()
+            if len(gt.size()) == 2:
+                gt = gt[:, 0]
+
+            if self.args.gauss:
+                noise = Variable(noise).cuda()
+            else:
+                noise = None
+            if self.args.binary:
+                UR = Variable(UR).cuda()
+            else:
+                UR = None
+
+            if not self.args.double:
+                pred0, pred1, mask = self.model( inp, 1, self.args.binary, noise=self.args.noise, gauss=self.args.gauss, R=noise, UR=UR, noise_rate=self.args.noise_rate, hard_threshold=self.args.hard_threshold_training, sharp=self.args.sharp_noise )
+                pred2 = None
+            else:
+                pred0, pred1, pred2, mask = self.model( inp, 1, self.args.binary, single=False, noise=self.args.noise, gauss=self.args.gauss, R=noise, UR=UR, noise_rate=self.args.noise_rate, hard_threshold=self.args.hard_threshold_training , sharp=self.args.sharp_noise)
+
+            loss1 = self.criterion( pred0, gt )
+            if self.args.KL == 0:
+                loss2 = self.criterion( pred1, gt )
+            else:
+                loss2 = (torch.nn.Softmax()(pred0) * (torch.log(torch.nn.Softmax()(pred0 + 1e-5)) - torch.log(torch.nn.Softmax()(pred1 + 1e-5)))).sum(1).mean(0) * self.args.KL + self.criterion( pred1, gt ) * (1 - self.args.KL)
+            loss = loss1 + loss2
+            if pred2 is not None:
+                #loss -= self.criterion( pred2, gt ) * 0.01
+                loss -= self.entropy( pred2 ) * 0.1
+            loss += mask.mean(0).sum() * self.args.L1
+            loss += (mask * (1-mask)).mean(0).sum() * self.args.quad
+            loss += (((mask[:, :, :mask.size(2)-1, :mask.size(3)-1] - mask[:, :, 1:, :mask.size(3)-1])**2 + (mask[:, :, :mask.size(2)-1, :mask.size(3)-1] - mask[:, :, :mask.size(2)-1, 1:])**2 + 1e-5)**0.5).mean(0).sum() * self.args.tot_var
+            if self.args.sharp_reg:
+                mask_A = (mask > 0.5).type( torch.cuda.FloatTensor )
+                mask_B = (mask < 0.5).type( torch.cuda.FloatTensor )
+                loss += -(mask * mask_A).mean(0).sum() * self.args.L1 * 0.5 + (mask * mask_B).mean(0).sum() * self.args.L1 * 0.5
+            diff0 = loss2 - loss1
+            losses.update( loss.data[0], inp.size(0) )
+            diff.update( diff0.data[0], inp.size(0) )
+            loss.backward()
+            self.optimizer_reg.step()
+            if self.reg_it % self.args.print_freq == 0:
+                self.logger.info( "mean={m:.5f}, std={s:.5f}".format(m=mask.mean().data[0], s=mask.std().data[0]))
+                log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val:.5f} ({loss.avg:.5f}), Loss1:{loss1:.5f}, Loss2:{loss2:.5f}, Loss2-Loss1:{dif.val:.5f} ({dif.avg:.5f})'.format( iter=self.reg_it, loss=losses, loss1=loss1.data[0], loss2=loss2.data[0], dif=diff )
+                self.logger.info( log_str )
+            if self.reg_it >= self.args.tot_iter:
+                return
+
+    def train_joint( self ):
+        logger = self.logger
+        logger.info("Joint Training Epoch")
+        losses = AverageMeter()
+        diff = AverageMeter()
+        self.model.train()
+        for i, (batch, noise, UR) in enumerate(zip(self.train_loader, self.noise_loader, self.uniform_loader)):
+            self.reg_it += 1
+            self.it += 1
+            if self.reg_it % (self.args.tot_iter // 3) == 0 and not self.args.const_lr:
+                for group in self.optimizer_reg.param_groups:
+                    group['lr'] *= 0.1
+                for group in self.optimizer_cls.param_groups:
+                    group['lr'] *= 0.1
+
+            self.optimizer_reg.zero_grad()
+            self.optimizer_cls.zero_grad()
 
             inp = Variable(batch[0]).cuda()
             gt = Variable(batch[1]).cuda()
@@ -367,10 +477,10 @@ class Env():
                 UR = None
 
             if not self.args.double:
-                pred0, pred1, mask = self.model( inp, 1, self.args.binary, noise=self.args.noise, gauss=self.args.gauss, R=noise, UR=UR, noise_rate=self.args.noise_rate )
+                pred0, pred1, mask = self.model( inp, 1, self.args.binary, noise=self.args.noise, gauss=self.args.gauss, R=noise, UR=UR, noise_rate=self.args.noise_rate, hard_threshold=self.args.hard_threshold_training, sharp=self.args.sharp_noise, quantiled=self.args.quantiled )
                 pred2 = None
             else:
-                pred0, pred1, pred2, mask = self.model( inp, 1, self.args.binary, single=False, noise=self.args.noise, gauss=self.args.gauss, R=noise, UR=UR, noise_rate=self.args.noise_rate )
+                pred0, pred1, pred2, mask = self.model( inp, 1, self.args.binary, single=False, noise=self.args.noise, gauss=self.args.gauss, R=noise, UR=UR, noise_rate=self.args.noise_rate, hard_threshold=self.args.hard_threshold_training , sharp=self.args.sharp_noise, quantiled=self.args.quantiled)
 
             loss1 = self.criterion( pred0, gt )
             if not self.args.KL:
@@ -382,11 +492,17 @@ class Env():
                 #loss -= self.criterion( pred2, gt ) * 0.01
                 loss -= self.entropy( pred2 ) * 0.1
             loss += mask.mean(0).sum() * self.args.L1
+            if self.args.sharp_reg:
+                mask_A = (mask > 0.5).type( torch.cuda.FloatTensor )
+                mask_B = (mask < 0.5).type( torch.cuda.FloatTensor )
+                loss += -(mask * mask_A).mean(0).sum() * self.args.L1 * 0.5 + (mask * mask_B).mean(0).sum() * self.args.L1 * 0.5
             diff0 = loss2 - loss1
+            loss += diff0**2
             losses.update( loss.data[0], inp.size(0) )
             diff.update( diff0.data[0], inp.size(0) )
             loss.backward()
             self.optimizer_reg.step()
+            self.optimizer_cls.step()
             if self.reg_it % self.args.print_freq == 0:
                 self.logger.info( "mean={m:.5f}, std={s:.5f}".format(m=mask.mean().data[0], s=mask.std().data[0]))
                 log_str = 'TRAIN -> Iter:{iter}\t Loss:{loss.val:.5f} ({loss.avg:.5f}), Loss1:{loss1:.5f}, Loss2:{loss2:.5f}, Loss2-Loss1:{dif.val:.5f} ({dif.avg:.5f})'.format( iter=self.reg_it, loss=losses, loss1=loss1.data[0], loss2=loss2.data[0], dif=diff )
@@ -612,7 +728,7 @@ class Env():
             std  = np.array([x/255.0 for x in [63.0, 62.1, 66.7]])
             img = (img * std + mean) * 255
             img = img[:, :, ::-1]
-        elif self.args.dataset == 'imgnet':
+        elif self.args.dataset == 'imgnet' or self.args.dataset == 'cub200':
             img = img.transpose( 1, 2, 0 )
             mean = np.array([0.485, 0.456, 0.406])
             std  = np.array([0.229, 0.224, 0.225])
@@ -702,11 +818,14 @@ class Env():
         pred0_l = []
         pred1_l = []
         gt_l = []
+        bbox_accs = []
+        IOUs = []
         for i, batch in tqdm.tqdm(enumerate(self.valid_loader)):
             inp = Variable( batch[0], volatile=True ).cuda()
             gt  = Variable( batch[1], volatile=True ).cuda()
+            if self.args.dataset == 'cub200':
+                gt = gt[:, 0]
 
-            #print("AAAAA")
             pred0, pred1, mask = self.model( inp )
             if self.args.dataset != 'chestx':
                 score0, pred0 = torch.max( pred0, 1 )
@@ -796,16 +915,11 @@ class Env():
                 for pic, img, j in zip(mask, inp, range(mask.shape[0])):
                     if cnt == 300:
                         return
-                    #if gt[j] == pred0[j]:
-                    #    continue
                     print("pred0:{}, pred1:{}, gt:{}".format( pred0[j], pred1[j], gt[j].type(torch.FloatTensor).data.numpy() ))
-                    #img1 = img * pic[0]
                     img = self.toRGB( img )
-                    #img1 = self.toRGB( img1 )
                     pic = pic[0]
-                    print(pic)
-                    #pic /= pic.max()
-                    #pic = (pic > pic.mean()).astype( np.float32 )
+                    if self.args.bbox:
+                        x, y, w, h = utils.bbox_generator( pic, float(pic.max()) * 0.5 )
                     pic *= 255
                     pic = pic.astype( np.uint8 )
                     pic = cv2.applyColorMap( pic, cv2.COLORMAP_JET )
@@ -813,6 +927,21 @@ class Env():
                     img1 = img1.astype(np.uint8)
 
                     img = img.astype( np.uint8 )
+
+                    if self.args.bbox:
+                        img, pic, img1 = img.copy(), pic.copy(), img1.copy()
+                        cv2.rectangle( img, (x, y), (x+w, y+h), (0, 0, 255), 2 )
+                        cv2.rectangle( pic, (x, y), (x+w, y+h), (0, 0, 255), 2 )
+                        cv2.rectangle( img1, (x, y), (x+w, y+h), (0, 0, 255), 2 )
+                        if self.args.dataset == 'cub200':
+                            bbox = batch[2][j].numpy()
+                            x, y, w, h = bbox
+                            x, y, w, h = int(x), int(y), int(w), int(h)
+                            cv2.rectangle( img, (x, y), (x+w, y+h), (0, 255, 0), 2 )
+                            cv2.rectangle( pic, (x, y), (x+w, y+h), (0, 255, 0), 2 )
+                            cv2.rectangle( img1, (x, y), (x+w, y+h), (0, 255, 0), 2 )
+
+
                     if not self.args.save_img:
                         cv2.imshow( 'x', pic )
                         cv2.imshow( 'y', img )
@@ -824,6 +953,21 @@ class Env():
                         cv2.imwrite( '{}_mask.png'.format(name), pic )
                         cv2.imwrite( '{}_masked_inp.png'.format(name), img1 )
                     cnt += 1
+
+            if self.args.bbox and self.args.dataset == 'cub200' and not self.args.print_mask:
+                mask = mask.type( torch.FloatTensor )
+                mask = mask.data.numpy()
+                for pic, bbox in zip(mask, batch[2]):
+                    pic = pic[0]
+                    x_p, y_p, w_p, h_p = utils.bbox_generator( pic, float(pic.max()) * 0.5 )
+                    x_g, y_g, w_g, h_g = bbox.numpy()
+                    IOU = utils.IOU( (x_p, y_p, x_p+w_p, y_p+h_p), (x_g, y_g, x_g+w_g, y_g+h_g) )
+                    if IOU > 0.5:
+                        bbox_accs.append(1)
+                    else:
+                        bbox_accs.append(0)
+                    IOUs.append(IOU)
+
                     
         if self.args.dataset != 'chestx':
             log_str = "VAL FINAL -> Accuracy0: {}, Accuracy1: {}".format( accs0.avg, accs1.avg )
@@ -837,6 +981,9 @@ class Env():
             log_str = "VAL FINAL -> AUC0: {}, AUC1: {}".format( AUC0.mean(), AUC1.mean() )
             accs1.avg = AUC1.mean()
         logger.info( log_str )
+        if self.args.bbox and self.args.dataset == 'cub200':
+            log_str = "IOU: {}, IOU Acc: {}".format( np.array(IOUs).mean(), np.array(bbox_accs).mean())
+            logger.info( log_str )
         self.save( accs1.avg )
 
 if __name__ == '__main__':
