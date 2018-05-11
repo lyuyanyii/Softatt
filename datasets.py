@@ -9,6 +9,7 @@ import gzip
 import pickle
 import numpy as np
 import os
+import torchvision.transforms as transforms
 
 class mnist_dataset(data.Dataset):
     def __init__( self, data_path, train ):
@@ -113,6 +114,84 @@ class chestx_dataset(data.Dataset):
     def __len__(self):
         return len(self.image_names)
 
+class imagenet_loc_dataset( data.Dataset ):
+    def __init__( self, data_dir, crop, transform = None ):
+        import csv
+        img_dirs = []
+        labels = []
+        bboxes_list = []
+        img_list_dir = os.path.join( data_dir, 'LOC_val_solution.csv' )
+        with open(img_list_dir, 'r') as f:
+            for line in f:
+                img_name, anno = line.split(',')
+                anno = str(anno).split()
+                if len(anno) % 5 != 0:
+                    continue
+                img_dirs.append( os.path.join( data_dir, 'val', anno[0], img_name + '.JPEG' ) )
+                bboxes = []
+                for i in range(len(anno) // 5):
+                    x, y, h, w = anno[i*5+1:i*5+5]
+                    x, y, h, w = float(x), float(y), float(h), float(w)
+                    h -= x
+                    w -= y
+                    bboxes.append([x, y, h, w])
+                bboxes_list.append( bboxes )
+                labels.append( anno[0] )
+
+        labels_list = sorted(set(labels))
+        dic = {}
+        for i in range(len(labels_list)):
+            dic[labels_list[i]] = i
+        labels = [dic[i] for i in labels]
+        self.img_dirs = img_dirs
+        self.labels = labels
+        self.bboxes_list = bboxes_list
+        self.transform = transform
+        self.len = len(img_dirs)
+        self.crop = crop
+        self.bbox_dic = pickle.load(open('bbox.data', 'rb'))
+    
+    def __len__( self ):
+        return self.len
+
+    def __getitem__( self, index ):
+        img = Image.open( self.img_dirs[index] ).convert('RGB')
+        bboxes = self.bboxes_list[index]
+        bbox_pred = self.bbox_dic[index]
+        if self.crop == -1:
+            A = None
+            for bbox in bboxes:
+                x, y, w, h = bbox
+                img_w, img_h = img.size
+                if img_w < img_h:
+                    r = 224 / img_w
+                else:
+                    r = 224 / img_h
+                x, y, w, h = x*r, y*r, w*r, h*r
+                img_w, img_h = img_w*r, img_h*r
+                x -= img_w/2 - 224/2
+                y -= img_h/2 - 224/2
+                if A is None:
+                    A = [x, y, w, h]
+                else:
+                    A = [min(x, A[0]), min(y, A[1]), max(A[0]+A[2], x+w) - min(x, A[0]), max(A[1]+A[3], y+h) - min(y, A[1])]
+        elif self.crop == 0:
+            x, y, w, h = bboxes[0]
+            img = img.crop((x, y, x+w, y+h))
+            img = img.resize((224, 224), Image.BILINEAR)
+            A = [0, 0, 224, 224]
+        elif self.crop == 1:
+            img = transforms.Resize(256)(img)
+            img = transforms.CenterCrop(224)(img)
+            x, y, w, h = bbox_pred
+            img = img.crop((int(x), int(y), int(x+w), int(y+h)))
+            img = img.resize((224, 224), Image.BILINEAR)
+            A = [0, 0, 224, 224]
+        if self.transform is not None:
+            img = self.transform(img)
+        label = self.labels[index]
+        return img, torch.from_numpy(np.array([label])), torch.from_numpy(np.array(A)), torch.from_numpy(np.array([index]))
+
 class cub200_dataset(data.Dataset):
     def __init__(self, data_dir, mode, transform=None):
         image_dirs = []
@@ -175,4 +254,35 @@ class cub200_dataset(data.Dataset):
             return img, torch.from_numpy(np.array([label]))
         else:
             return img, torch.from_numpy(np.array([label])), torch.from_numpy(np.array(bbox))
+
+class object_discover_dataset( data.Dataset ):
+    def __init__( self, data_dir, category = None, transform_img = None, transform_gt = None ):
+        self.img_dirs = []
+        self.gt_dirs = []
+        data_dir = os.path.join( data_dir, category )
+        gt_dir = os.path.join( data_dir, 'GroundTruth' )
+        entry_list = list(os.scandir(gt_dir))
+        for entry in entry_list:
+            if not entry.is_dir():
+                path = entry.path
+                self.gt_dirs.append( path )
+                img_path = path.replace( 'GroundTruth/', '' ).replace( 'png', 'jpg' )
+                self.img_dirs.append( img_path )
+        self.transform_img = transform_img
+        self.transform_gt = transform_gt
+        self.len = len(self.img_dirs)
+
+    def __len__( self ):
+        return self.len
+
+    def __getitem__(self, index):
+        img = Image.open( self.img_dirs[index] ).convert( 'RGB' )
+        gt = Image.open( self.gt_dirs[index] )
+
+        if self.transform_img is not None:
+            img = self.transform_img(img)
+        if self.transform_gt is not None:
+            gt = self.transform_gt(gt)
+
+        return img, gt
 

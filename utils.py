@@ -9,6 +9,49 @@ import numpy as np
 
 from torch.autograd import Function, Variable
 
+def accuracy(output, target, topk=(1,)):
+    maxk = max(topk)
+    batch_size = target.size(0)
+
+    _, pred = output.topk(maxk, 1, True, True)
+    pred = pred.t()
+    correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+    res = []
+    for k in topk:
+        correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+        res.append(correct_k.mul_(100.0 / batch_size))
+    return res
+
+def random_select( gt ):
+    gt = gt.numpy()
+    index = []
+    gt2 = []
+    for i in range(gt.shape[0]):
+        for j in range(gt.shape[1]):
+            if gt[i, j] > 0:
+                index.append( (i, j) )
+                b = np.zeros( (20, ) )
+                b[j] = 1
+                gt2.append( b )
+    index = np.array(index)
+    gt2 = np.array(gt2)
+    index = index.astype( np.int64 )
+    #gt2 = Variable( torch.from_numpy(gt2) ).cuda()
+    #gt2 = gt2.type( torch.cuda.FloatTensor )
+    gt2 = Variable( torch.from_numpy( gt2 ), requires_grad=True ).cuda()
+    gt2 = gt2.type( torch.cuda.FloatTensor )
+    return index, gt2
+
+class ToOnehot( object ):
+    def __call__(self, x):
+        y = torch.zeros( 20 )
+        for i in range(1, 21):
+            if (x == i).sum() > 0:
+                y[i - 1] = 1
+        y = y
+        return y
+
 def bbox_generator( img, threshold ):
     if isinstance( img, Variable ):
         img = img.type( torch.FloatTensor )
@@ -80,7 +123,7 @@ class ThresholdBinarized( Function ):
     def forward( self, x ):
         r = torch.rand( x.size(0), 1, 1, 1 )
         r = r.cuda().expand( x.size() )
-        x = torch.max( x, torch.ones(1).cuda() * 0.1 )
+        #x = torch.max( x, torch.ones(1).cuda() * 0.1 )
         mask_P = (x > r).type( torch.cuda.FloatTensor )
         self.save_for_backward( mask_P )
         return mask_P
@@ -101,13 +144,18 @@ class WeightedBCELoss( nn.Module ):
     def __init__(self):
         super().__init__()
     def forward( self, input, target ):
+        input = nn.Sigmoid()(input)
+        """
         w0 = (target == 0).type( torch.cuda.FloatTensor )
         w1 = (target == 1).type( torch.cuda.FloatTensor )
-        w0 /= 0.95
-        w1 /= 0.05
+        w0 /= w0.sum() / (w0.sum() + w1.sum()) + 1e-5
+        w1 /= w1.sum() / (w0.sum() + w1.sum()) + 1e-5
         loss = -( target * torch.log(input + 1e-5) + (1 - target) * torch.log(1 - input + 1e-5) )
         loss = (loss * (w0 + w1)).mean()
-        return loss
+        """
+        input = input / (input.sum(1)[:, None].expand( input.size() ) + 1e-5)
+        target = target / (target.sum(1)[:, None].expand( target.size() ) + 1e-5)
+        return ((input - target)**2).sum(1).mean(0)
 
 def cls_zero_grad( m ):
     if hasattr(m, 'cls'):

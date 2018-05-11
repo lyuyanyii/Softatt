@@ -58,6 +58,7 @@ class Cls(nn.Module):
         f = self.norm( x4 )
         f = f.mean(3).mean(2)
         pred = self.fc( f )
+        #TODO
         return x0, x1, x2, x3, x4, pred
 
 def conv( inp_chl, out_chl, ker_size = 3, stride = 1, padding = 1 ):
@@ -132,7 +133,7 @@ class Net( nn.Module ):
         else:
             self.reg = LReg()
 
-    def forward( self, x, stage = 1, binary=False, single=True, noise=False, gauss=False, R=None, UR=None, noise_rate=None ):
+    def forward( self, x, stage = 1, binary=False, single=True, noise=False, gauss=False, R=None, UR=None, noise_rate=None, **kwargs ):
         x0, x1, x2, x3, x4, pred0 = self.cls(x)
 
         if stage == 0:

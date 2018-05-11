@@ -31,7 +31,11 @@ class Cls( nn.Module ):
         f = f.view( f.size(0), -1 )
         pred = self.fc( f )
         return x0, x1, x2, x3, x4, pred
+def Net():
+    import CNet
+    return CNet.Net( cls = Cls() )
 
+"""
 class Reg( nn.Module ):
     def __init__( self, pre_chls ):
         super().__init__()
@@ -89,7 +93,7 @@ class Net( nn.Module ):
         else:
             self.reg = LReg()
 
-    def forward( self, x, stage = 1, binary=False, single=True, noise=False, gauss=False, R=None, UR=None, noise_rate=None ):
+    def forward( self, x, stage = 1, binary=False, single=True, noise=False, gauss=False, R=None, UR=None, noise_rate=None, **kwargs ):
         x0, x1, x2, x3, x4, pred0 = self.cls(x)
 
         if stage == 0:
@@ -124,3 +128,4 @@ class Net( nn.Module ):
         x0, x1, x2, x3, x4, pred1 = self.cls(x)
 
         return pred0, pred1, mask
+"""

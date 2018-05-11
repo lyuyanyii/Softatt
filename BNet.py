@@ -104,8 +104,10 @@ class Reg(nn.Module):
     def forward( self, x0, x1, x2 ):
         x2 = self.conv3( self.conv2( self.conv1( x2 ) ) )
         x1 = self.conv5( self.conv4( x1 ) )
+        x2 = F.upsample( x2, (x1.size(2), x1.size(3)), mode = 'bilinear' )
         x = self.conv6( torch.cat([x2, x1], 1) )
         x0 = self.conv8( self.conv7( x0 ) )
+        x = F.upsample( x, (x0.size(2), x0.size(3)), mode = 'bilinear' )
         x = self.conv9( torch.cat([x0, x], 1) )
         mask = nn.Sigmoid()( x )
         return mask
@@ -117,7 +119,7 @@ class Net(nn.Module):
         self.cls = Cls()
         self.reg = Reg( self.cls.chl1, self.cls.chl2, self.cls.chl3 )
 
-    def forward( self, x, stage = 1, binary = False, single = True ):
+    def forward( self, x, stage = 1, binary = False, single = True, **kwargs ):
         x0, x1, x2, pred0 = self.cls(x)
         
         if stage == 0:
